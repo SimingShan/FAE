@@ -1,0 +1,58 @@
+{
+  "V4": {
+    "heat": {
+      "lin_single": 0.49965155124664307,
+      "mlp_single": 0.9470756649971008,
+      "recon_relL2_median": 0.03168710321187973,
+      "sigma_mean": 1.6487209796905518,
+      "sigma_active_frac": 0.0,
+      "logvar_mean_C": 1.0
+    },
+    "advection": {
+      "lin_single": -0.03141582012176514,
+      "mlp_single": -0.009707927703857422,
+      "recon_relL2_median": 0.029505815356969833,
+      "sigma_mean": 1.6487209796905518,
+      "sigma_active_frac": 0.0,
+      "logvar_mean_C": 1.0
+    },
+    "burgers": {
+      "lin_single": 0.45909565687179565,
+      "mlp_single": 0.8873016834259033,
+      "recon_relL2_median": 0.05825705826282501,
+      "sigma_mean": 1.6487209796905518,
+      "sigma_active_frac": 0.0,
+      "logvar_mean_C": 1.0
+    },
+    "reaction_diffusion": {
+      "lin_single": 0.7607628703117371,
+      "mlp_single": 0.804423451423645,
+      "recon_relL2_median": 0.006086608394980431,
+      "sigma_mean": 1.6487209796905518,
+      "sigma_active_frac": 0.0,
+      "logvar_mean_C": 1.0
+    }
+  },
+  "V3+VICReg": {
+    "heat": {
+      "lin_single": 0.9698808789253235,
+      "mlp_single": 0.9744549989700317,
+      "recon_relL2_median": 0.03631282225251198
+    },
+    "advection": {
+      "lin_single": -0.0566483736038208,
+      "mlp_single": 0.002615213394165039,
+      "recon_relL2_median": 0.10082387179136276
+    },
+    "burgers": {
+      "lin_single": 0.7523683309555054,
+      "mlp_single": 0.8109698295593262,
+      "recon_relL2_median": 0.04840526729822159
+    },
+    "reaction_diffusion": {
+      "lin_single": 0.7906072735786438,
+      "mlp_single": 0.8066419959068298,
+      "recon_relL2_median": 0.01507629081606865
+    }
+  }
+}

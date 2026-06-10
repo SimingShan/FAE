@@ -1,0 +1,88 @@
+{
+  "v3_recon": {
+    "params_M": 6.979105,
+    "tier": "sparse",
+    "probe_heat_nu": 0.4929093560938881,
+    "probe_advection_beta": -0.01425281984045701,
+    "probe_burgers_nu": 0.34692725008521497,
+    "classification": {
+      "logreg": 0.91975,
+      "knn": 0.88925,
+      "adv_f1": 0.9899598393574297
+    },
+    "consistency": {
+      "cos_sim": 0.9987536072731018,
+      "l2_diff": 89.53990936279297,
+      "n_sensors": 128
+    },
+    "variance_across_subsets_mean": 11.504164695739746
+  },
+  "v3_vicreg": {
+    "params_M": 6.979105,
+    "tier": "sparse",
+    "probe_heat_nu": 0.9662250620038926,
+    "probe_advection_beta": -0.010601175493406556,
+    "probe_burgers_nu": 0.7086608065392974,
+    "classification": {
+      "logreg": 0.9765,
+      "knn": 0.95675,
+      "adv_f1": 0.9970089730807578
+    },
+    "consistency": {
+      "cos_sim": 0.9995601773262024,
+      "l2_diff": 36.50048828125,
+      "n_sensors": 128
+    },
+    "variance_across_subsets_mean": 2.7217721939086914
+  },
+  "mlp": {
+    "params_M": 6.987841,
+    "tier": "sparse",
+    "probe_heat_nu": 0.5274894924088072,
+    "probe_advection_beta": -0.02323780201444614,
+    "probe_burgers_nu": 0.14293616153196353,
+    "classification": {
+      "logreg": 0.82675,
+      "knn": 0.75525,
+      "adv_f1": 0.5610795454545454
+    },
+    "consistency": {
+      "cos_sim": 0.7141323685646057,
+      "l2_diff": 0.671840488910675,
+      "n_sensors": 128
+    },
+    "variance_across_subsets_mean": 0.0006404732121154666
+  },
+  "cnn": {
+    "params_M": 7.547713,
+    "tier": "dense",
+    "probe_heat_nu": 0.8641053799981189,
+    "probe_advection_beta": -0.008418071260220206,
+    "probe_burgers_nu": 0.7627663324239078,
+    "classification": {
+      "logreg": 0.97,
+      "knn": 0.94725,
+      "adv_f1": 1.0
+    },
+    "consistency": null,
+    "variance_across_subsets_mean": null
+  },
+  "mae": {
+    "params_M": 7.17768,
+    "tier": "dense",
+    "probe_heat_nu": 0.6631676088823053,
+    "probe_advection_beta": -0.014279584831103032,
+    "probe_burgers_nu": 0.8249761163324736,
+    "classification": {
+      "logreg": 0.964,
+      "knn": 0.97825,
+      "adv_f1": 1.0
+    },
+    "consistency": null,
+    "variance_across_subsets_mean": null
+  },
+  "_random_baseline": {
+    "probe_heat_nu": -0.017648849888483698,
+    "tier": "baseline"
+  }
+}

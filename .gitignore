@@ -1,0 +1,18 @@
+# data & heavy artifacts (regenerable; see docs/DATA.md and zoo.py)
+data/
+results/checkpoints/
+results/figures/
+results/probes/**/emb_*.npz
+*.latest.pt
+logs/
+# environments / caches
+__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
+*.egg-info/
+wandb/
+.DS_Store
+# third-party clones live in ../WFAE_attic now
+external/
+archive/
