@@ -195,9 +195,11 @@ def main():
         keep = norms > 0.1 * np.median(norms)
         rel_med = float(np.median(rels[keep]))
 
-        # σ stats
+        # σ / posterior-health stats
         sigma_va = np.exp(0.5 * S_va4)
         sigma_active_frac = float((sigma_va.std(0) > 1e-3).mean())  # dims with variation across samples
+        lv_max = float(v4.latent_head.logvar_max)
+        logvar_sat_frac = float((S_va4 > lv_max - 0.05).mean())     # entries parked at the upper bound
 
         results["FAE-NP"][sys_name] = {
             "lin_single": r2_lin, "mlp_single": r2_mlp,
@@ -205,10 +207,13 @@ def main():
             "sigma_mean": float(sigma_va.mean()),
             "sigma_active_frac": sigma_active_frac,
             "logvar_mean_C": float(S_va4.mean()),
+            "logvar_sat_frac": logvar_sat_frac,
+            "mu_abs_mean": float(np.abs(Z_va4).mean()),
         }
         print(f"  FAE-NP {sys_name:22s}  lin={r2_lin:.3f}  MLP={r2_mlp:.3f}  "
               f"recon_med={rel_med:.3f}  σ_mean={sigma_va.mean():.3f}  "
-              f"σ_active={sigma_active_frac:.2f}", flush=True)
+              f"σ_active={sigma_active_frac:.2f}  lv_sat={logvar_sat_frac:.2f}  "
+              f"|mu|={np.abs(Z_va4).mean():.2f}", flush=True)
 
         # --- V3+VICReg for comparison ---
         if v3 is not None:

@@ -36,22 +36,43 @@ from .fae import FAEEncoder, CViTBlock, fourier_features
 class GaussianLatentHead(nn.Module):
     """Tokens (B, L, d_model) -> mean-pool -> (mu, logvar) of dim d_latent.
 
-    Init: logvar bias = -2 (std ~ 0.37, moderately tight initial posteriors).
-    Clamp: (-6, 1) so var stays in [0.0025, 2.7] — the tight upper bound keeps
-    the encoder from going wide-uninformative.
+    logvar_param:
+      - "clamp" (legacy): logvar = raw.clamp(logvar_min, logvar_max). The hard
+        clamp is gradient-dead at the bounds — the pre-2026-06-10 checkpoints
+        trained in this mode parked at the upper bound (degenerate constant
+        sigma; see the FAE-NP open issue in docs/FAE.md). Kept as the default
+        so old checkpoints (whose configs lack the key) load unchanged.
+      - "sigmoid": logvar = min + (max - min) * sigmoid(raw). Same bounds,
+        but smooth — gradients never vanish at saturation.
+
+    Init in both modes: logvar ~ -2 (std ~ 0.37, moderately tight posteriors).
     """
-    def __init__(self, d_model: int, d_latent: int):
+    def __init__(self, d_model: int, d_latent: int, logvar_param: str = "clamp",
+                  logvar_min: float = -6.0, logvar_max: float = 1.0):
         super().__init__()
+        assert logvar_param in ("clamp", "sigmoid")
         self.to_mu = nn.Linear(d_model, d_latent)
         self.to_logvar = nn.Linear(d_model, d_latent)
         nn.init.zeros_(self.to_logvar.weight)
-        nn.init.constant_(self.to_logvar.bias, -2.0)
+        if logvar_param == "clamp":
+            nn.init.constant_(self.to_logvar.bias, -2.0)
+        else:
+            # sigmoid(bias) = (-2 - min) / (max - min)  =>  logvar(init) = -2
+            frac = (-2.0 - logvar_min) / (logvar_max - logvar_min)
+            nn.init.constant_(self.to_logvar.bias, math.log(frac / (1.0 - frac)))
         self.d_latent = d_latent
+        self.logvar_param = logvar_param
+        self.logvar_min = logvar_min
+        self.logvar_max = logvar_max
 
     def forward(self, tokens):                             # (B, L, d_model)
         pooled = tokens.mean(dim=1)                        # (B, d_model)
         mu = self.to_mu(pooled)
-        logvar = self.to_logvar(pooled).clamp(-6.0, 1.0)
+        raw = self.to_logvar(pooled)
+        if self.logvar_param == "clamp":
+            logvar = raw.clamp(self.logvar_min, self.logvar_max)
+        else:
+            logvar = self.logvar_min + (self.logvar_max - self.logvar_min) * torch.sigmoid(raw)
         return mu, logvar                                  # each (B, d_latent)
 
 
@@ -126,14 +147,16 @@ class FAENP(nn.Module):
                   n_freq=32, max_freq=32, coord_dim=1,
                   d_latent=256,
                   decoder_num_blocks=2, decoder_mlp_mult=2,
-                  n_context_tokens=64, dec_dim=320):
+                  n_context_tokens=64, dec_dim=320,
+                  logvar_param="clamp"):
         super().__init__()
         self.encoder = FAEEncoder(
             emb_dim=emb_dim, num_iter=num_iter, depth_per_iter=depth_per_iter,
             num_cross_heads=num_cross_heads, num_self_heads=num_self_heads,
             n_freq=n_freq, max_freq=max_freq, num_latents=num_latents,
             coord_dim=coord_dim)
-        self.latent_head = GaussianLatentHead(emb_dim, d_latent)
+        self.latent_head = GaussianLatentHead(emb_dim, d_latent,
+                                                  logvar_param=logvar_param)
         self.z_to_context = LatentToContext(d_latent, n_context_tokens, dec_dim)
         self.decoder = HeteroscedasticCViTDecoder(
             emb_dim_in=dec_dim, dec_dim=dec_dim,

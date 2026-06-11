@@ -121,10 +121,8 @@ def main():
         r2_b, _, _ = lin_probe(z1_tr, y_tr, z1_va, y_va)
 
         # (c) mean of K samples at test time, train on μ
-        zK_va = mu_va.copy()                                 # (N_va, d_latent)
-        for _ in range(K):
-            zK_va += std_va * np.random.randn(*mu_va.shape)
-        zK_va /= (K + 1)
+        zK_va = np.mean([mu_va + std_va * np.random.randn(*mu_va.shape)
+                           for _ in range(K)], axis=0)       # (N_va, d_latent)
         r2_c, _, _ = lin_probe(mu_tr, y_tr, zK_va, y_va)
 
         # (d) train on K-stacked samples (noise-augmented), test on μ
