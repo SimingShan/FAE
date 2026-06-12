@@ -43,6 +43,20 @@ def off_diagonal(x):
     return x.flatten()[:-1].view(n - 1, n + 1)[:, 1:].flatten()
 
 
+def make_projector(in_dim, mlp_spec="8192-8192-8192"):
+    """VICReg expander (training-only), as in train_fae.py."""
+    import torch.nn as nn
+    full = f"{in_dim}-{mlp_spec}"
+    layers = []
+    f = list(map(int, full.split("-")))
+    for i in range(len(f) - 2):
+        layers.append(nn.Linear(f[i], f[i + 1]))
+        layers.append(nn.BatchNorm1d(f[i + 1]))
+        layers.append(nn.ReLU(True))
+    layers.append(nn.Linear(f[-2], f[-1], bias=False))
+    return nn.Sequential(*layers)
+
+
 def train(out_path, epochs=20, batch=32, lr=5e-4, gpu=0, workers=4,
           warmup_epochs=2, time_subsample=10,
           n_query_offcontext=384,
@@ -51,6 +65,7 @@ def train(out_path, epochs=20, batch=32, lr=5e-4, gpu=0, workers=4,
           beta=1e-3, free_bits=0.1,
           anchor=1e-3,
           vicreg_mu_std=0.0, vicreg_mu_cov=0.0,
+          align_kl=0.0, proj_sim=0.0, proj_std=0.0, proj_cov=0.0,
           recon_only_epochs=2, beta_warmup_epochs=4,
           d_latent=None,
           decoder_num_blocks=2,
@@ -90,18 +105,32 @@ def train(out_path, epochs=20, batch=32, lr=5e-4, gpu=0, workers=4,
     print(f"  FAE-NP params: {n_par/1e6:.3f}M  (d_latent={model.d_latent})", flush=True)
     lv_max = model.latent_head.logvar_max
 
+    # Unified objective: independent second view + projected VICReg on mu +
+    # symmetric-KL posterior alignment. Active when any weight > 0.
+    unified = (align_kl > 0) or (proj_sim > 0) or (proj_std > 0) or (proj_cov > 0)
+    projector = None
+    if proj_sim > 0 or proj_std > 0 or proj_cov > 0:
+        projector = make_projector(d_latent_use).to(device)
+        n_proj = sum(p.numel() for p in projector.parameters())
+        print(f"  projector params: {n_proj/1e6:.1f}M  (training-only)", flush=True)
+
     np_config = dict(context_ratio=context_ratio,
                        jitter_ctx_ratio=jitter_ctx_ratio,
                        n_query_offcontext=n_query_offcontext,
                        mcnt_choices=list(mcnt_choices),
                        beta=beta, free_bits=free_bits, anchor=anchor,
                        vicreg_mu_std=vicreg_mu_std, vicreg_mu_cov=vicreg_mu_cov,
+                       align_kl=align_kl, proj_sim=proj_sim,
+                       proj_std=proj_std, proj_cov=proj_cov,
                        recon_only_epochs=recon_only_epochs,
                        beta_warmup_epochs=beta_warmup_epochs,
                        time_subsample=time_subsample,
                        recon_kind=recon_kind)
 
-    opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
+    params = list(model.parameters())
+    if projector is not None:
+        params += list(projector.parameters())
+    opt = torch.optim.AdamW(params, lr=lr, weight_decay=1e-4)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs)
 
     history = []
@@ -115,6 +144,7 @@ def train(out_path, epochs=20, batch=32, lr=5e-4, gpu=0, workers=4,
         agg = {k: 0.0 for k in ("recon", "kl_raw_sum", "kl_max", "kl_active_frac",
                                   "anchor_kl", "mu_abs", "lv_sat_frac",
                                   "vic_std", "vic_cov",
+                                  "align_kl", "p_sim", "p_std", "p_cov",
                                   "logvar_C", "logvar_CT", "logvar_y")}
         agg["n"] = 0
 
@@ -195,8 +225,43 @@ def train(out_path, epochs=20, batch=32, lr=5e-4, gpu=0, workers=4,
                 cov = (zc.T @ zc) / (B - 1)
                 l_vic_cov = off_diagonal(cov).pow(2).sum() / zc.size(1)
 
+            # Unified objective: INDEPENDENT second view of the same field.
+            # The nested KL (C subset of CT) is the weak consistency game —
+            # two independent sensor draws are the strong one (VICReg-style),
+            # and the symmetric KL aligns the *posteriors* (mean AND sigma),
+            # which is the NP-native generalization of view alignment.
+            l_align = x_flat.new_zeros(())
+            l_psim = x_flat.new_zeros(())
+            l_pstd = x_flat.new_zeros(())
+            l_pcov = x_flat.new_zeros(())
+            if unified:
+                n_2 = int(mcnt_choices[np.random.randint(len(mcnt_choices))])
+                idx_2 = torch.randperm(X, device=device)[:n_2]
+                mu_2, logvar_2 = model.encode_distribution(
+                    x_flat[:, idx_2].unsqueeze(-1), full_coords[idx_2])
+                if align_kl > 0:
+                    sym = 0.5 * (gaussian_kl(mu_C, logvar_C, mu_2, logvar_2)
+                                   + gaussian_kl(mu_2, logvar_2, mu_C, logvar_C))
+                    l_align = sym.mean(dim=0).sum() / sym.size(1)
+                if projector is not None:
+                    xz = projector(mu_C)
+                    yz = projector(mu_2)
+                    l_psim = F.mse_loss(xz, yz)
+                    xz = xz - xz.mean(0); yz = yz - yz.mean(0)
+                    std_x = torch.sqrt(xz.var(0) + 1e-4)
+                    std_y = torch.sqrt(yz.var(0) + 1e-4)
+                    l_pstd = (F.relu(1 - std_x).mean() / 2
+                                + F.relu(1 - std_y).mean() / 2)
+                    cov_x = (xz.T @ xz) / (B - 1)
+                    cov_y = (yz.T @ yz) / (B - 1)
+                    n_pd = xz.shape[1]
+                    l_pcov = (off_diagonal(cov_x).pow_(2).sum().div(n_pd)
+                                + off_diagonal(cov_y).pow_(2).sum().div(n_pd))
+
             loss = (recon + beta_t * kl_floored + anchor_t * anchor_kl
-                      + vicreg_mu_std * l_vic_std + vicreg_mu_cov * l_vic_cov)
+                      + vicreg_mu_std * l_vic_std + vicreg_mu_cov * l_vic_cov
+                      + (align_kl * ramp) * l_align
+                      + proj_sim * l_psim + proj_std * l_pstd + proj_cov * l_pcov)
 
             opt.zero_grad(); loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -213,6 +278,10 @@ def train(out_path, epochs=20, batch=32, lr=5e-4, gpu=0, workers=4,
             agg["lv_sat_frac"]    += lv_sat * B
             agg["vic_std"]        += float(l_vic_std) * B
             agg["vic_cov"]        += float(l_vic_cov) * B
+            agg["align_kl"]       += float(l_align) * B
+            agg["p_sim"]          += float(l_psim) * B
+            agg["p_std"]          += float(l_pstd) * B
+            agg["p_cov"]          += float(l_pcov) * B
             agg["logvar_C"]       += float(logvar_C.mean())  * B
             agg["logvar_CT"]      += float(logvar_CT.mean()) * B
             agg["logvar_y"]       += float(logvar_y.mean())  * B
@@ -222,12 +291,16 @@ def train(out_path, epochs=20, batch=32, lr=5e-4, gpu=0, workers=4,
         n = max(agg["n"], 1)
         elapsed = int(time.time() - t0)
         s = {k: agg[k] / n for k in agg if k != "n"}
-        print(f"ep {ep+1:3d}/{epochs}  recon={s['recon']:+.3e}  "
-              f"KL_sum={s['kl_raw_sum']:.3e}  KL_max={s['kl_max']:.2e}  "
-              f"active={s['kl_active_frac']:.2f}  anchor={s['anchor_kl']:.3e}  "
-              f"|mu|={s['mu_abs']:.2f}  lv_sat={s['lv_sat_frac']:.2f}  "
-              f"logvar(C/CT/y)={s['logvar_C']:+.2f}/{s['logvar_CT']:+.2f}/{s['logvar_y']:+.2f}  "
-              f"β_t={beta_t:.1e} a_t={anchor_t:.1e}  ({elapsed}s)", flush=True)
+        line = (f"ep {ep+1:3d}/{epochs}  recon={s['recon']:+.3e}  "
+                 f"KL_sum={s['kl_raw_sum']:.3e}  KL_max={s['kl_max']:.2e}  "
+                 f"active={s['kl_active_frac']:.2f}  anchor={s['anchor_kl']:.3e}  "
+                 f"|mu|={s['mu_abs']:.2f}  lv_sat={s['lv_sat_frac']:.2f}  "
+                 f"logvar(C/CT/y)={s['logvar_C']:+.2f}/{s['logvar_CT']:+.2f}/{s['logvar_y']:+.2f}  "
+                 f"β_t={beta_t:.1e} a_t={anchor_t:.1e}")
+        if unified:
+            line += (f"  align={s['align_kl']:.3e}  "
+                      f"p(sim/std/cov)={s['p_sim']:.2e}/{s['p_std']:.2e}/{s['p_cov']:.2e}")
+        print(line + f"  ({elapsed}s)", flush=True)
         history.append({"epoch": ep + 1, **s, "beta_t": beta_t,
                           "anchor_t": anchor_t, "elapsed": elapsed})
 
@@ -237,9 +310,12 @@ def train(out_path, epochs=20, batch=32, lr=5e-4, gpu=0, workers=4,
                       "np_config": np_config, "epoch": ep + 1},
                      out_path.replace(".pt", ".latest.pt"))
 
-    torch.save({"method": "fae_np", "history": history, "n_par": n_par,
-                  "model": model.state_dict(), "config": config,
-                  "np_config": np_config}, out_path)
+    final = {"method": "fae_np", "history": history, "n_par": n_par,
+               "model": model.state_dict(), "config": config,
+               "np_config": np_config}
+    if projector is not None:
+        final["projector"] = projector.state_dict()
+    torch.save(final, out_path)
     print(f"\ndone in {int(time.time() - t0)}s → {out_path}", flush=True)
 
 
@@ -266,6 +342,15 @@ if __name__ == "__main__":
                      help="VICReg variance hinge on mu_CT (hybrid)")
     ap.add_argument("--vicreg_mu_cov",  type=float, default=0.0,
                      help="VICReg covariance penalty on mu_CT (hybrid)")
+    ap.add_argument("--align_kl",       type=float, default=0.0,
+                     help="symmetric KL between posteriors of two INDEPENDENT "
+                          "views (unified objective); 0 disables")
+    ap.add_argument("--proj_sim",       type=float, default=0.0,
+                     help="projected VICReg similarity weight on (mu_C, mu_view2)")
+    ap.add_argument("--proj_std",       type=float, default=0.0,
+                     help="projected VICReg variance-hinge weight")
+    ap.add_argument("--proj_cov",       type=float, default=0.0,
+                     help="projected VICReg covariance weight")
     ap.add_argument("--recon_only_epochs", type=int, default=2,
                      help="pure-recon epochs before the KL/anchor ramp")
     ap.add_argument("--beta_warmup_epochs", type=int, default=4)
@@ -281,6 +366,7 @@ if __name__ == "__main__":
             tuple(args.mcnt_choices),
             args.beta, args.free_bits, args.anchor,
             args.vicreg_mu_std, args.vicreg_mu_cov,
+            args.align_kl, args.proj_sim, args.proj_std, args.proj_cov,
             args.recon_only_epochs, args.beta_warmup_epochs,
             args.d_latent, args.decoder_num_blocks, args.recon_kind,
             args.logvar_param)

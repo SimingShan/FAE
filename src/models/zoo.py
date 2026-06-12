@@ -59,6 +59,10 @@ METHODS = [
     MethodSpec("mae",                "MAE1DAE",        "mae", "model",  True,  True),
     MethodSpec("jepa_perceiver",     "JEPA-Perceiver", "fae", "target", True,  False),
     MethodSpec("jepa_vit",           "JEPA-ViT",       "vit", "target", False, False),
+    # Ablation: VICReg trained with the sensing floor raised to 256 — tests the
+    # invariance-capacity trade-off hypothesis (dimension cap set by the
+    # sparsest training views). Auto-skipped while the checkpoint is absent.
+    MethodSpec("fae_vicreg_floor256", "FAE+VICReg-f256", "fae", "model", True, True),
 ]
 METHODS_BY_NAME = {m.name: m for m in METHODS}
 
