@@ -242,6 +242,10 @@ def main():
     ap.add_argument("--gpu", type=int, default=0)
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--time_subsample", type=int, default=10)
+    ap.add_argument("--sim_coeff", type=float, default=25.0,
+                     help="VICReg view-alignment weight (fae_vicreg)")
+    ap.add_argument("--std_coeff", type=float, default=25.0)
+    ap.add_argument("--cov_coeff", type=float, default=1.0)
     ap.add_argument("--mcnt_choices", type=int, nargs="+",
                      default=[64, 128, 256, 512, 1024],
                      help="sensor counts to sample from per batch; pass a single value for fixed-N")
@@ -257,6 +261,8 @@ def main():
                 batch=args.batch, lr=args.lr, warmup_epochs=args.warmup_epochs,
                 gpu=args.gpu, workers=args.workers,
                 time_subsample=args.time_subsample,
+                sim_coeff=args.sim_coeff, std_coeff=args.std_coeff,
+                cov_coeff=args.cov_coeff,
                 mcnt_choices=tuple(args.mcnt_choices),
                 decoder_kind=args.decoder_kind,
                 decoder_num_blocks=args.decoder_num_blocks,

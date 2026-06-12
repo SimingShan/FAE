@@ -63,6 +63,9 @@ METHODS = [
     # invariance-capacity trade-off hypothesis (dimension cap set by the
     # sparsest training views). Auto-skipped while the checkpoint is absent.
     MethodSpec("fae_vicreg_floor256", "FAE+VICReg-f256", "fae", "model", True, True),
+    # Ablation: VICReg alignment weight lowered 25 -> 5 (capacity-cap suspect #2:
+    # the invariance objective strength itself).
+    MethodSpec("fae_vicreg_sim5",     "FAE+VICReg-s5",   "fae", "model", True, True),
 ]
 METHODS_BY_NAME = {m.name: m for m in METHODS}
 

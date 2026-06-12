@@ -156,7 +156,11 @@ def train(out_path, epochs=20, batch=32, lr=5e-4, gpu=0, workers=4,
         else:
             ramp = 1.0
         beta_t = beta * ramp
-        anchor_t = anchor * ramp
+        # Anchor keeps a 10% floor from step 1: with no scale constraint the
+        # recon-only phase lets |mu| drift (attempt 2 reached |mu|~18 with
+        # sigma~0.06), and the arriving KL ramp then shocks sigma to the
+        # ceiling. A small always-on pull keeps the geometry sane.
+        anchor_t = anchor * max(ramp, 0.1)
 
         for x_flat, _cls, _coeff in loader:
             x_flat = x_flat.to(device, non_blocking=True).float()         # (B, X)
@@ -240,8 +244,15 @@ def train(out_path, epochs=20, batch=32, lr=5e-4, gpu=0, workers=4,
                 mu_2, logvar_2 = model.encode_distribution(
                     x_flat[:, idx_2].unsqueeze(-1), full_coords[idx_2])
                 if align_kl > 0:
-                    sym = 0.5 * (gaussian_kl(mu_C, logvar_C, mu_2, logvar_2)
-                                   + gaussian_kl(mu_2, logvar_2, mu_C, logvar_C))
+                    # sigma DETACHED: alignment must not be satisfiable by
+                    # widening the posteriors (KL ~ dmu^2/sigma^2 — inflating
+                    # sigma is the cheap escape; the first unified run drove
+                    # logvar to 86% saturation this way). With sigma detached
+                    # the term aligns the means, uncertainty-weighted, and
+                    # sigma stays governed by recon + anchor + nested KL.
+                    lv_C_d, lv_2_d = logvar_C.detach(), logvar_2.detach()
+                    sym = 0.5 * (gaussian_kl(mu_C, lv_C_d, mu_2, lv_2_d)
+                                   + gaussian_kl(mu_2, lv_2_d, mu_C, lv_C_d))
                     l_align = sym.mean(dim=0).sum() / sym.size(1)
                 if projector is not None:
                     xz = projector(mu_C)
@@ -258,10 +269,13 @@ def train(out_path, epochs=20, batch=32, lr=5e-4, gpu=0, workers=4,
                     l_pcov = (off_diagonal(cov_x).pow_(2).sum().div(n_pd)
                                 + off_diagonal(cov_y).pow_(2).sum().div(n_pd))
 
+            # Projector terms ride the ramp too: unanchored, the variance
+            # hinge blew |mu| up to ~160 during the recon-only phase.
             loss = (recon + beta_t * kl_floored + anchor_t * anchor_kl
                       + vicreg_mu_std * l_vic_std + vicreg_mu_cov * l_vic_cov
                       + (align_kl * ramp) * l_align
-                      + proj_sim * l_psim + proj_std * l_pstd + proj_cov * l_pcov)
+                      + ramp * (proj_sim * l_psim + proj_std * l_pstd
+                                  + proj_cov * l_pcov))
 
             opt.zero_grad(); loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
