@@ -1,0 +1,54 @@
+{
+  "heat": {
+    "uncond_spec_l1": 7.324613571166992,
+    "momatch_spec_l1": 5.934990406036377,
+    "uncond_std_ratio": 3.1799356937408447,
+    "momatch_std_ratio": 0.578641414642334,
+    "cond_spread_over_fieldstd": {
+      "32": 4.319359302520752,
+      "64": 0.4093311131000519,
+      "256": 0.3073086142539978
+    },
+    "mu_abs_mean": 0.15890273451805115,
+    "mu_norm_mean": 5.280907154083252
+  },
+  "advection": {
+    "uncond_spec_l1": 1.3658442497253418,
+    "momatch_spec_l1": 1.1761900186538696,
+    "uncond_std_ratio": 1.1369774341583252,
+    "momatch_std_ratio": 0.785366415977478,
+    "cond_spread_over_fieldstd": {
+      "32": 0.19543097913265228,
+      "64": 0.07459526509046555,
+      "256": 0.04378170147538185
+    },
+    "mu_abs_mean": 0.9020786881446838,
+    "mu_norm_mean": 17.906681060791016
+  },
+  "burgers": {
+    "uncond_spec_l1": 2.038080930709839,
+    "momatch_spec_l1": 1.0550448894500732,
+    "uncond_std_ratio": 2.6208317279815674,
+    "momatch_std_ratio": 0.6874760985374451,
+    "cond_spread_over_fieldstd": {
+      "32": 0.22562748193740845,
+      "64": 0.08058593422174454,
+      "256": 0.07275781035423279
+    },
+    "mu_abs_mean": 0.29080602526664734,
+    "mu_norm_mean": 7.0224690437316895
+  },
+  "reaction_diffusion": {
+    "uncond_spec_l1": 4.0175628662109375,
+    "momatch_spec_l1": 3.8686437606811523,
+    "uncond_std_ratio": 0.4642716646194458,
+    "momatch_std_ratio": 0.6540539860725403,
+    "cond_spread_over_fieldstd": {
+      "32": Infinity,
+      "64": Infinity,
+      "256": Infinity
+    },
+    "mu_abs_mean": 0.4070553779602051,
+    "mu_norm_mean": 11.591029167175293
+  }
+}

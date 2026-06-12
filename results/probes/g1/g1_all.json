@@ -1,14 +1,16 @@
 {
-  "v3_recon": {
+  "fae_recon": {
+    "label": "FAE-recon",
     "params_M": 6.979105,
     "tier": "sparse",
-    "probe_heat_nu": 0.4929093560938881,
-    "probe_advection_beta": -0.01425281984045701,
-    "probe_burgers_nu": 0.34692725008521497,
+    "probe_heat_nu": 0.49290924902201594,
+    "probe_advection_beta": -0.013420016484035457,
+    "probe_burgers_nu": 0.32461866941348105,
+    "probe_reaction_diffusion_D": 0.7440580886781489,
     "classification": {
-      "logreg": 0.91975,
-      "knn": 0.88925,
-      "adv_f1": 0.9899598393574297
+      "logreg": 0.9125,
+      "knn": 0.887,
+      "adv_f1": 0.9874182184197282
     },
     "consistency": {
       "cos_sim": 0.9987536072731018,
@@ -17,15 +19,17 @@
     },
     "variance_across_subsets_mean": 11.504164695739746
   },
-  "v3_vicreg": {
+  "fae_vicreg": {
+    "label": "FAE+VICReg",
     "params_M": 6.979105,
     "tier": "sparse",
-    "probe_heat_nu": 0.9662250620038926,
-    "probe_advection_beta": -0.010601175493406556,
-    "probe_burgers_nu": 0.7086608065392974,
+    "probe_heat_nu": 0.9662250625459141,
+    "probe_advection_beta": -0.021405656985328925,
+    "probe_burgers_nu": 0.7046188168710115,
+    "probe_reaction_diffusion_D": 0.7876764729457449,
     "classification": {
-      "logreg": 0.9765,
-      "knn": 0.95675,
+      "logreg": 0.9795,
+      "knn": 0.95925,
       "adv_f1": 0.9970089730807578
     },
     "consistency": {
@@ -35,16 +39,38 @@
     },
     "variance_across_subsets_mean": 2.7217721939086914
   },
+  "fae_spatiotemporal": {
+    "label": "FAE-T2",
+    "params_M": 6.979105,
+    "tier": "sparse",
+    "probe_heat_nu": 0.9717470064133167,
+    "probe_advection_beta": -0.006175418821009693,
+    "probe_burgers_nu": 0.7885932578808093,
+    "probe_reaction_diffusion_D": 0.7766307822973826,
+    "classification": {
+      "logreg": 0.9905,
+      "knn": 0.98525,
+      "adv_f1": 1.0
+    },
+    "consistency": {
+      "cos_sim": 0.9999972581863403,
+      "l2_diff": 0.26944777369499207,
+      "n_sensors": 128
+    },
+    "variance_across_subsets_mean": 8.012257603695616e-05
+  },
   "mlp": {
+    "label": "MLPSparseAE",
     "params_M": 6.987841,
     "tier": "sparse",
-    "probe_heat_nu": 0.5274894924088072,
-    "probe_advection_beta": -0.02323780201444614,
-    "probe_burgers_nu": 0.14293616153196353,
+    "probe_heat_nu": 0.527489482169938,
+    "probe_advection_beta": -0.016381402139245882,
+    "probe_burgers_nu": 0.15575669183644547,
+    "probe_reaction_diffusion_D": 0.34384663612633615,
     "classification": {
-      "logreg": 0.82675,
-      "knn": 0.75525,
-      "adv_f1": 0.5610795454545454
+      "logreg": 0.8235,
+      "knn": 0.7565,
+      "adv_f1": 0.5850244926522044
     },
     "consistency": {
       "cos_sim": 0.7141323685646057,
@@ -54,35 +80,75 @@
     "variance_across_subsets_mean": 0.0006404732121154666
   },
   "cnn": {
+    "label": "CNN1DAE",
     "params_M": 7.547713,
     "tier": "dense",
-    "probe_heat_nu": 0.8641053799981189,
-    "probe_advection_beta": -0.008418071260220206,
-    "probe_burgers_nu": 0.7627663324239078,
+    "probe_heat_nu": 0.8641051701556128,
+    "probe_advection_beta": -0.018398705941351512,
+    "probe_burgers_nu": 0.7494310041729554,
+    "probe_reaction_diffusion_D": 0.7138406530303161,
     "classification": {
-      "logreg": 0.97,
-      "knn": 0.94725,
+      "logreg": 0.97325,
+      "knn": 0.94875,
       "adv_f1": 1.0
     },
     "consistency": null,
     "variance_across_subsets_mean": null
   },
   "mae": {
+    "label": "MAE1DAE",
     "params_M": 7.17768,
     "tier": "dense",
-    "probe_heat_nu": 0.6631676088823053,
-    "probe_advection_beta": -0.014279584831103032,
-    "probe_burgers_nu": 0.8249761163324736,
+    "probe_heat_nu": 0.6631675917402232,
+    "probe_advection_beta": -0.019258450466458132,
+    "probe_burgers_nu": 0.8063192525431419,
+    "probe_reaction_diffusion_D": 0.7945419539031597,
     "classification": {
-      "logreg": 0.964,
-      "knn": 0.97825,
+      "logreg": 0.96525,
+      "knn": 0.9795,
       "adv_f1": 1.0
     },
     "consistency": null,
     "variance_across_subsets_mean": null
   },
+  "jepa_perceiver": {
+    "label": "JEPA-Perceiver",
+    "params_M": 6.979105,
+    "tier": "sparse",
+    "probe_heat_nu": 0.6706982103747972,
+    "probe_advection_beta": -0.007111734912162548,
+    "probe_burgers_nu": 0.5116066152558052,
+    "probe_reaction_diffusion_D": 0.7755906679532221,
+    "classification": {
+      "logreg": 0.9465,
+      "knn": 0.92525,
+      "adv_f1": 0.9965052421367948
+    },
+    "consistency": {
+      "cos_sim": 0.9998913407325745,
+      "l2_diff": 0.2791409492492676,
+      "n_sensors": 128
+    },
+    "variance_across_subsets_mean": 7.808805821696296e-05
+  },
+  "jepa_vit": {
+    "label": "JEPA-ViT",
+    "params_M": 14.227584,
+    "tier": "dense",
+    "probe_heat_nu": 0.9452085426206077,
+    "probe_advection_beta": 0.0024904996636171406,
+    "probe_burgers_nu": 0.8945740358426785,
+    "probe_reaction_diffusion_D": 0.7968557885289658,
+    "classification": {
+      "logreg": 0.992,
+      "knn": 0.98575,
+      "adv_f1": 0.9975062344139651
+    },
+    "consistency": null,
+    "variance_across_subsets_mean": null
+  },
   "_random_baseline": {
-    "probe_heat_nu": -0.017648849888483698,
+    "probe_heat_nu": -0.017648848891753,
     "tier": "baseline"
   }
 }

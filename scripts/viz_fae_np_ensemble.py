@@ -137,7 +137,8 @@ def main():
                   "If V4's posterior were input-aware, the blue band should NARROW going 32→256 sensors.",
                   fontsize=11, y=1.005)
     plt.tight_layout()
-    p = f"{OUT}/v4_ensemble_viz.png"
+    tag = args.np_ckpt.replace(".pt", "")
+    p = f"{OUT}/{tag}_recon_ensemble.png"
     fig.savefig(p, dpi=110, bbox_inches="tight"); plt.close(fig)
     print(f"saved {p}", flush=True)
 
@@ -178,12 +179,12 @@ def main():
                   fontsize=10)
     ax.grid(alpha=0.25); ax.legend(fontsize=9)
     plt.tight_layout()
-    p2 = f"{OUT}/v4_ensemble_spread_vs_N.png"
+    p2 = f"{OUT}/{tag}_spread_vs_N.png"
     fig.savefig(p2, dpi=120, bbox_inches="tight"); plt.close(fig)
     print(f"\nsaved {p2}", flush=True)
 
     import json
-    json.dump(summary, open(f"{OUT}/v4_ensemble_spread_vs_N.json", "w"), indent=2)
+    json.dump(summary, open(f"{OUT}/{tag}_spread_vs_N.json", "w"), indent=2)
 
 
 if __name__ == "__main__":

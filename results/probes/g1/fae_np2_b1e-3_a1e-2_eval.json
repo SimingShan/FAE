@@ -1,0 +1,66 @@
+{
+  "FAE-NP": {
+    "heat": {
+      "lin_single": 0.7277697920799255,
+      "mlp_single": 0.9461527466773987,
+      "recon_relL2_median": 0.08041168749332428,
+      "sigma_mean": 0.9411337375640869,
+      "sigma_active_frac": 1.0,
+      "logvar_mean_C": -0.22346951067447662,
+      "logvar_sat_frac": 0.0,
+      "mu_abs_mean": 0.06742660701274872
+    },
+    "advection": {
+      "lin_single": -0.049153923988342285,
+      "mlp_single": -0.010422825813293457,
+      "recon_relL2_median": 0.12518128752708435,
+      "sigma_mean": 0.703107476234436,
+      "sigma_active_frac": 0.984375,
+      "logvar_mean_C": -1.195937991142273,
+      "logvar_sat_frac": 0.0,
+      "mu_abs_mean": 0.4482860267162323
+    },
+    "burgers": {
+      "lin_single": 0.7590130567550659,
+      "mlp_single": 0.8866698741912842,
+      "recon_relL2_median": 0.11017288267612457,
+      "sigma_mean": 0.8968520760536194,
+      "sigma_active_frac": 1.0,
+      "logvar_mean_C": -0.39961880445480347,
+      "logvar_sat_frac": 0.0,
+      "mu_abs_mean": 0.16071856021881104
+    },
+    "reaction_diffusion": {
+      "lin_single": 0.7719180583953857,
+      "mlp_single": 0.8035387992858887,
+      "recon_relL2_median": 0.010190041735768318,
+      "sigma_mean": 0.8906113505363464,
+      "sigma_active_frac": 1.0,
+      "logvar_mean_C": -0.4492585062980652,
+      "logvar_sat_frac": 0.0,
+      "mu_abs_mean": 0.19146135449409485
+    }
+  },
+  "FAE+VICReg": {
+    "heat": {
+      "lin_single": 0.9698808789253235,
+      "mlp_single": 0.9748060703277588,
+      "recon_relL2_median": 0.03631282225251198
+    },
+    "advection": {
+      "lin_single": -0.0566483736038208,
+      "mlp_single": 0.005132198333740234,
+      "recon_relL2_median": 0.10082387179136276
+    },
+    "burgers": {
+      "lin_single": 0.7523683309555054,
+      "mlp_single": 0.8153425455093384,
+      "recon_relL2_median": 0.04840526729822159
+    },
+    "reaction_diffusion": {
+      "lin_single": 0.7906072735786438,
+      "mlp_single": 0.8069261312484741,
+      "recon_relL2_median": 0.01507629081606865
+    }
+  }
+}
