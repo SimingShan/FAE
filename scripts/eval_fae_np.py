@@ -85,10 +85,13 @@ def v4_encode(model, u, full_coords, n_sensors):
 
 @torch.no_grad()
 def v4_recon_full(model, u, full_coords, n_sensors=1024):
-    """Encode at n_sensors, decode at full grid.  Returns (B, X) μ_y."""
-    mu, logvar = v4_encode(model, u, full_coords, n_sensors)
-    z = mu                                          # deterministic: use mean
-    mu_y, _ = model.decode(z, full_coords)
+    """Encode at n_sensors, decode at full grid.  Returns (B, X) μ_y.
+    Uses the ANP deterministic path when the model has one."""
+    idx = torch.arange(0, X, X // n_sensors, device=device)[:n_sensors]
+    tokens = model.encoder(u[:, idx].unsqueeze(-1), full_coords[idx])
+    mu, _ = model.latent_head(tokens)
+    det = tokens if getattr(model, "det_path", False) else None
+    mu_y, _ = model.decode(mu, full_coords, det_tokens=det)
     return mu_y
 
 

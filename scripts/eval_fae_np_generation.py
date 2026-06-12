@@ -99,11 +99,13 @@ def main():
             for n_ctx in N_CTX_LIST:
                 cidx = torch.from_numpy(np.sort(
                     rng.choice(X, n_ctx, replace=False))).to(device)
-                mu_c, lv_c = m.encode_distribution(
-                    u_gt[cidx].view(1, -1, 1), coords[cidx])
+                tokens_c = m.encoder(u_gt[cidx].view(1, -1, 1), coords[cidx])
+                mu_c, lv_c = m.latent_head(tokens_c)
                 zs = mu_c + (0.5 * lv_c).exp() * torch.randn(
                     K_COND, m.d_latent, device=device)
-                uc = m.decode(zs, coords)[0]
+                det = (tokens_c.expand(K_COND, -1, -1)
+                        if getattr(m, "det_path", False) else None)
+                uc = m.decode(zs, coords, det_tokens=det)[0]
                 cond[n_ctx] = float(uc.std(0).mean() / u_gt.std())
 
         spec_real = log_spectrum(U_tr)

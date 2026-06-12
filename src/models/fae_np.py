@@ -148,7 +148,8 @@ class FAENP(nn.Module):
                   d_latent=256,
                   decoder_num_blocks=2, decoder_mlp_mult=2,
                   n_context_tokens=64, dec_dim=320,
-                  logvar_param="clamp"):
+                  logvar_param="clamp",
+                  det_path=False):
         super().__init__()
         self.encoder = FAEEncoder(
             emb_dim=emb_dim, num_iter=num_iter, depth_per_iter=depth_per_iter,
@@ -168,6 +169,13 @@ class FAENP(nn.Module):
         self.dec_dim = dec_dim
         self.n_context_tokens = n_context_tokens
         self.coord_dim = coord_dim
+        # ANP-style dual path: when True, the decoder cross-attends the
+        # context's encoder tokens ALONGSIDE the z-derived context tokens
+        # (deterministic path for fidelity, latent path for uncertainty).
+        # The pure global-z design forces all information through one pooled
+        # 256-dim vector — the same readout bottleneck the dimension
+        # diagnostics exposed (tokens carry ID~22, pooled ~10).
+        self.det_path = det_path
 
     def encode_distribution(self, u, in_coords):
         """u: (B, N_in, 1), in_coords: (N_in, D) or (B, N_in, D).
@@ -179,8 +187,12 @@ class FAENP(nn.Module):
     def reparam(mu, logvar):
         return mu + (0.5 * logvar).exp() * torch.randn_like(mu)
 
-    def decode(self, z, query_coords):
+    def decode(self, z, query_coords, det_tokens=None):
+        """det_tokens: optional (B, M, emb_dim) context encoder tokens — the
+        ANP deterministic path. None = decode from z alone (generation)."""
         ctx = self.z_to_context(z)                          # (B, n_context, dec_dim)
+        if det_tokens is not None:
+            ctx = torch.cat([det_tokens, ctx], dim=1)
         return self.decoder(ctx, query_coords)
 
 

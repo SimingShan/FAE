@@ -70,7 +70,8 @@ def train(out_path, epochs=20, batch=32, lr=5e-4, gpu=0, workers=4,
           d_latent=None,
           decoder_num_blocks=2,
           recon_kind="mse",
-          logvar_param="sigmoid"):
+          logvar_param="sigmoid",
+          det_path=False, det_drop=0.25):
     device = f"cuda:{gpu}" if torch.cuda.is_available() else "cpu"
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     print(f"=== FAE-NP on G1 (device={device}) ===", flush=True)
@@ -99,7 +100,8 @@ def train(out_path, epochs=20, batch=32, lr=5e-4, gpu=0, workers=4,
                     d_latent=d_latent_use, decoder_num_blocks=decoder_num_blocks,
                     decoder_mlp_mult=2,
                     n_context_tokens=64, dec_dim=320,
-                    logvar_param=logvar_param)
+                    logvar_param=logvar_param,
+                    det_path=det_path)
     model = FAENP(**config).to(device)
     n_par = sum(p.numel() for p in model.parameters())
     print(f"  FAE-NP params: {n_par/1e6:.3f}M  (d_latent={model.d_latent})", flush=True)
@@ -125,7 +127,8 @@ def train(out_path, epochs=20, batch=32, lr=5e-4, gpu=0, workers=4,
                        recon_only_epochs=recon_only_epochs,
                        beta_warmup_epochs=beta_warmup_epochs,
                        time_subsample=time_subsample,
-                       recon_kind=recon_kind)
+                       recon_kind=recon_kind,
+                       det_path=det_path, det_drop=det_drop)
 
     params = list(model.parameters())
     if projector is not None:
@@ -187,7 +190,8 @@ def train(out_path, epochs=20, batch=32, lr=5e-4, gpu=0, workers=4,
 
             # --- encode context + rich (C ∪ T_sensor) ---
             u_C = x_flat[:, ctx_idx].unsqueeze(-1)
-            mu_C, logvar_C = model.encode_distribution(u_C, full_coords[ctx_idx])
+            tokens_C = model.encoder(u_C, full_coords[ctx_idx])
+            mu_C, logvar_C = model.latent_head(tokens_C)
 
             ct_idx = torch.cat([ctx_idx, tgt_sensor_idx])
             u_CT = x_flat[:, ct_idx].unsqueeze(-1)
@@ -195,7 +199,13 @@ def train(out_path, epochs=20, batch=32, lr=5e-4, gpu=0, workers=4,
 
             # --- sample from rich posterior, decode at targets ---
             z = model.reparam(mu_CT, logvar_CT)
-            mu_y, logvar_y = model.decode(z, full_coords[tgt_idx_all])
+            # ANP deterministic path: decoder also cross-attends the CONTEXT
+            # tokens. Randomly dropped so the decoder stays usable from z
+            # alone (unconditional generation).
+            det = None
+            if det_path and np.random.rand() >= det_drop:
+                det = tokens_C
+            mu_y, logvar_y = model.decode(z, full_coords[tgt_idx_all], det_tokens=det)
             y = x_flat[:, tgt_idx_all]
 
             # --- losses ---
@@ -373,6 +383,11 @@ if __name__ == "__main__":
     ap.add_argument("--recon_kind", choices=["mse", "het"], default="mse",
                      help="mse forces decoder to use z; het is the full NP NLL")
     ap.add_argument("--logvar_param", choices=["sigmoid", "clamp"], default="sigmoid")
+    ap.add_argument("--det_path", action="store_true",
+                     help="ANP-style deterministic path: decoder cross-attends "
+                          "the context tokens alongside the z tokens")
+    ap.add_argument("--det_drop", type=float, default=0.25,
+                     help="probability of dropping the det path per step")
     args = ap.parse_args()
     train(args.out, args.epochs, args.batch, args.lr, args.gpu, args.workers,
             args.warmup_epochs, args.time_subsample,
@@ -383,4 +398,4 @@ if __name__ == "__main__":
             args.align_kl, args.proj_sim, args.proj_std, args.proj_cov,
             args.recon_only_epochs, args.beta_warmup_epochs,
             args.d_latent, args.decoder_num_blocks, args.recon_kind,
-            args.logvar_param)
+            args.logvar_param, args.det_path, args.det_drop)

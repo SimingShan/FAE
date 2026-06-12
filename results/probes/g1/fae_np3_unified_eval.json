@@ -1,0 +1,66 @@
+{
+  "FAE-NP": {
+    "heat": {
+      "lin_single": 0.9458680152893066,
+      "mlp_single": 0.9650808572769165,
+      "recon_relL2_median": 0.10581088811159134,
+      "sigma_mean": 0.30850836634635925,
+      "sigma_active_frac": 0.97265625,
+      "logvar_mean_C": -2.8805482387542725,
+      "logvar_sat_frac": 0.02734375,
+      "mu_abs_mean": 0.5113276839256287
+    },
+    "advection": {
+      "lin_single": -0.0053435564041137695,
+      "mlp_single": 0.002838730812072754,
+      "recon_relL2_median": 0.44515812397003174,
+      "sigma_mean": 0.1429334282875061,
+      "sigma_active_frac": 0.9140625,
+      "logvar_mean_C": -4.808862209320068,
+      "logvar_sat_frac": 0.02734375,
+      "mu_abs_mean": 0.4049552083015442
+    },
+    "burgers": {
+      "lin_single": 0.6778048276901245,
+      "mlp_single": 0.7507727146148682,
+      "recon_relL2_median": 0.2582473158836365,
+      "sigma_mean": 0.2281394749879837,
+      "sigma_active_frac": 0.97265625,
+      "logvar_mean_C": -3.6119399070739746,
+      "logvar_sat_frac": 0.02734375,
+      "mu_abs_mean": 0.4632035493850708
+    },
+    "reaction_diffusion": {
+      "lin_single": 0.7825803756713867,
+      "mlp_single": 0.8026772737503052,
+      "recon_relL2_median": 0.0237744078040123,
+      "sigma_mean": 0.17646583914756775,
+      "sigma_active_frac": 0.97265625,
+      "logvar_mean_C": -4.472861289978027,
+      "logvar_sat_frac": 0.02734375,
+      "mu_abs_mean": 0.4734179675579071
+    }
+  },
+  "FAE+VICReg": {
+    "heat": {
+      "lin_single": 0.9698808789253235,
+      "mlp_single": 0.9737151265144348,
+      "recon_relL2_median": 0.03631282225251198
+    },
+    "advection": {
+      "lin_single": -0.0566483736038208,
+      "mlp_single": 0.0012132525444030762,
+      "recon_relL2_median": 0.10082387179136276
+    },
+    "burgers": {
+      "lin_single": 0.7523683309555054,
+      "mlp_single": 0.81723952293396,
+      "recon_relL2_median": 0.04840526729822159
+    },
+    "reaction_diffusion": {
+      "lin_single": 0.7906072735786438,
+      "mlp_single": 0.8032592535018921,
+      "recon_relL2_median": 0.01507629081606865
+    }
+  }
+}
