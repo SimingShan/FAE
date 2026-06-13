@@ -40,23 +40,26 @@ def load_v4(name="fae_np_b1e-4.pt"):
 
 @torch.no_grad()
 def encode_sparse(model, u_field, full_coords, n_sensors, seed=0):
-    """u_field: (1, X). Returns (mu, logvar) of (1, d_latent) and sensor idx."""
+    """u_field: (1, X). Returns (mu, logvar) of (1, d_latent), sensor idx, and
+    the context tokens (for the ANP deterministic path, else None)."""
     rng = torch.Generator(device=device).manual_seed(seed)
     idx = torch.randperm(X, generator=rng, device=device)[:n_sensors].sort().values
     coords_in = full_coords[idx]
-    mu, lv = model.encode_distribution(u_field[:, idx].unsqueeze(-1), coords_in)
-    return mu, lv, idx
+    tokens = model.encoder(u_field[:, idx].unsqueeze(-1), coords_in)
+    mu, lv = model.latent_head(tokens)
+    det = tokens if getattr(model, "det_path", False) else None
+    return mu, lv, idx, det
 
 
 @torch.no_grad()
-def sample_predictions(model, mu, logvar, full_coords, K=K):
-    """For K different z samples, decode at full grid.
-    Returns (K, X) μ_y and (K, X) σ_y."""
+def sample_predictions(model, mu, logvar, full_coords, det=None, K=K):
+    """For K different z samples, decode at full grid (using the ANP det path
+    when present). Returns (K, X) μ_y and (K, X) σ_y."""
     Mu_y, Sigma_y = [], []
     for k in range(K):
         eps = torch.randn_like(mu)
         z = mu + (0.5 * logvar).exp() * eps
-        mu_y, logvar_y = model.decode(z, full_coords)         # (1, X), (1, X)
+        mu_y, logvar_y = model.decode(z, full_coords, det_tokens=det)  # (1, X)
         Mu_y.append(mu_y.squeeze(0).cpu().numpy())
         Sigma_y.append((0.5 * logvar_y).exp().squeeze(0).cpu().numpy())
     return np.stack(Mu_y), np.stack(Sigma_y)
@@ -88,9 +91,9 @@ def main():
 
         for c_i, n_sensors in enumerate([32, 256]):
             ax = axes[r_i, c_i]
-            mu, lv, sensor_idx = encode_sparse(v4, u_t, full_coords, n_sensors,
+            mu, lv, sensor_idx, det = encode_sparse(v4, u_t, full_coords, n_sensors,
                                                       seed=42)
-            Mu_y, Sigma_y = sample_predictions(v4, mu, lv, full_coords, K=K)
+            Mu_y, Sigma_y = sample_predictions(v4, mu, lv, full_coords, det=det, K=K)
             mean_pred = Mu_y.mean(axis=0)
             std_pred  = Mu_y.std(axis=0)             # spread across z samples
             sigma_y_mean = Sigma_y.mean(axis=0)      # heteroscedastic σ_y (averaged over K)
@@ -159,8 +162,8 @@ def main():
             spreads = []
             for tidx in sel:
                 u_t = torch.from_numpy(u_all[tidx, t_idx][None]).to(device).float()
-                mu, lv, _ = encode_sparse(v4, u_t, full_coords, n_sensors, seed=int(tidx))
-                Mu_y, _ = sample_predictions(v4, mu, lv, full_coords, K=15)
+                mu, lv, _, det = encode_sparse(v4, u_t, full_coords, n_sensors, seed=int(tidx))
+                Mu_y, _ = sample_predictions(v4, mu, lv, full_coords, det=det, K=15)
                 spreads.append(float(Mu_y.std(axis=0).mean()))
             avg_spread = float(np.mean(spreads))
             summary[sys_name][n_sensors] = avg_spread

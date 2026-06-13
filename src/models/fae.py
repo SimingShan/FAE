@@ -188,16 +188,17 @@ class FAEEncoder(nn.Module):
     def __init__(self, emb_dim=320, num_iter=4, depth_per_iter=4,
                   num_cross_heads=4, num_self_heads=8,
                   n_freq=32, max_freq=32, val_dim=32,
-                  num_latents=128, dropout=0.0, coord_dim=2):
+                  num_latents=128, dropout=0.0, coord_dim=2, in_chans=1):
         super().__init__()
         self.num_iter = num_iter
         self.n_freq = n_freq
         self.max_freq = max_freq
         self.coord_dim = coord_dim
+        self.in_chans = in_chans
 
         coord_feat_dim = 2 * coord_dim * n_freq
         self.coord_proj = nn.Linear(coord_feat_dim, emb_dim - val_dim)
-        self.val_proj = nn.Linear(1, val_dim)
+        self.val_proj = nn.Linear(in_chans, val_dim)
 
         self.latents = nn.Parameter(torch.empty(1, num_latents, emb_dim))
         with torch.no_grad():
@@ -237,7 +238,7 @@ class SenseiverDecoder(nn.Module):
     against the latent tokens; linear head (no terminal LayerNorm).
     """
     def __init__(self, emb_dim_in=320, dec_dim=320, n_freq=32, max_freq=32,
-                  num_heads=4, dropout=0.0, latent_size=1, coord_dim=2):
+                  num_heads=4, dropout=0.0, latent_size=1, coord_dim=2, out_chans=1):
         super().__init__()
         self.n_freq = n_freq
         self.max_freq = max_freq
@@ -250,7 +251,7 @@ class SenseiverDecoder(nn.Module):
         coord_feat_dim = 2 * coord_dim * n_freq
         self.query_proj = nn.Linear(coord_feat_dim + dec_dim, dec_dim)
         self.cross_layer = CrossLayer(dec_dim, emb_dim_in, num_heads, dropout)
-        self.head = nn.Linear(dec_dim, 1)
+        self.head = nn.Linear(dec_dim, out_chans)
 
     def forward(self, latents, query_coords):
         if query_coords.dim() == 2:
@@ -290,7 +291,7 @@ class CViTDecoder(nn.Module):
     """Stack of CViTBlocks — a deeper, Perceiver-IO / CViT-style readout."""
     def __init__(self, emb_dim_in=320, dec_dim=320, n_freq=32, max_freq=32,
                   num_heads=4, num_blocks=2, mlp_mult=2, dropout=0.0,
-                  latent_size=1, coord_dim=2):
+                  latent_size=1, coord_dim=2, out_chans=1):
         super().__init__()
         self.n_freq = n_freq
         self.max_freq = max_freq
@@ -306,7 +307,7 @@ class CViTDecoder(nn.Module):
             CViTBlock(dec_dim, emb_dim_in, num_heads, mlp_mult, dropout)
             for _ in range(num_blocks)
         ])
-        self.head = nn.Linear(dec_dim, 1)
+        self.head = nn.Linear(dec_dim, out_chans)
 
     def forward(self, latents, query_coords):
         if query_coords.dim() == 2:
@@ -371,26 +372,27 @@ class FAE(nn.Module):
                   dec_n_freq=32, dec_max_freq=32, dec_num_heads=4,
                   num_latents=128, dropout=0.0, coord_dim=2,
                   decoder_kind="senseiver", decoder_num_blocks=2,
-                  decoder_mlp_mult=2, readout_queries=0):
+                  decoder_mlp_mult=2, readout_queries=0, in_chans=1):
         super().__init__()
         self.encoder = FAEEncoder(
             emb_dim=emb_dim, num_iter=num_iter, depth_per_iter=depth_per_iter,
             num_cross_heads=num_cross_heads, num_self_heads=num_self_heads,
             n_freq=n_freq, max_freq=max_freq, val_dim=val_dim,
-            num_latents=num_latents, dropout=dropout, coord_dim=coord_dim)
+            num_latents=num_latents, dropout=dropout, coord_dim=coord_dim,
+            in_chans=in_chans)
         if decoder_kind == "senseiver":
             self.decoder = SenseiverDecoder(
                 emb_dim_in=emb_dim, dec_dim=emb_dim,
                 n_freq=dec_n_freq, max_freq=dec_max_freq,
                 num_heads=dec_num_heads, dropout=dropout,
-                latent_size=1, coord_dim=coord_dim)
+                latent_size=1, coord_dim=coord_dim, out_chans=in_chans)
         elif decoder_kind == "cvit":
             self.decoder = CViTDecoder(
                 emb_dim_in=emb_dim, dec_dim=emb_dim,
                 n_freq=dec_n_freq, max_freq=dec_max_freq,
                 num_heads=dec_num_heads, num_blocks=decoder_num_blocks,
                 mlp_mult=decoder_mlp_mult, dropout=dropout,
-                latent_size=1, coord_dim=coord_dim)
+                latent_size=1, coord_dim=coord_dim, out_chans=in_chans)
         else:
             raise ValueError(f"unknown decoder_kind={decoder_kind!r}")
         self.decoder_kind = decoder_kind

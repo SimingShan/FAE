@@ -1,0 +1,58 @@
+diff --git a/physics_jepa/data.py b/physics_jepa/data.py
+index 00f227d..1e9ffaf 100644
+--- a/physics_jepa/data.py
++++ b/physics_jepa/data.py
+@@ -138,6 +138,8 @@ class WellDatasetForJEPA(Dataset):
+                 H = W = 256 # cut shear flow x axis in half to make square
+             if self.dataset_name == "rayleigh_benard":
+                 H = W = 128 # take middle 128x128 square
++            if self.dataset_name == "turbulent_radiative_layer_2D":
++                H = W = 128 # native 128x384; crop the middle 128 of the width
+             dtype = f[field_paths[0]].dtype
+ 
+         d_sizes = np.asarray(d_sizes, dtype=np.int64)
+@@ -195,6 +197,9 @@ class WellDatasetForJEPA(Dataset):
+         elif self.dataset_name == "rayleigh_benard":
+             h_slice = slice(192, 192+W)
+             w_slice = slice(None)
++        elif self.dataset_name == "turbulent_radiative_layer_2D":
++            h_slice = slice(None)         # full height 128
++            w_slice = slice(128, 128+W)   # middle 128 of width 384
+         else:
+             h_slice = slice(None)
+             w_slice = slice(None)
+@@ -464,6 +469,8 @@ class WellDatasetForMPP(Dataset):
+                 H = W = 256 # cut shear flow x axis in half to make square
+             if self.dataset_name == "rayleigh_benard":
+                 H = W = 128 # take middle 128x128 square
++            if self.dataset_name == "turbulent_radiative_layer_2D":
++                H = W = 128 # native 128x384; crop the middle 128 of the width
+             dtype = f[field_paths[0]].dtype
+ 
+         d_sizes = np.asarray(d_sizes, dtype=np.int64)
+@@ -514,6 +521,9 @@ class WellDatasetForMPP(Dataset):
+         elif self.dataset_name == "rayleigh_benard":
+             h_slice = slice(192, 192+W)
+             w_slice = slice(None)
++        elif self.dataset_name == "turbulent_radiative_layer_2D":
++            h_slice = slice(None)         # full height 128
++            w_slice = slice(128, 128+W)   # middle 128 of width 384
+         else:
+             h_slice = slice(None)
+             w_slice = slice(None)
+diff --git a/physics_jepa/finetuner.py b/physics_jepa/finetuner.py
+index df75f12..a1b200a 100644
+--- a/physics_jepa/finetuner.py
++++ b/physics_jepa/finetuner.py
+@@ -58,6 +58,11 @@ class BaseFinetuner(Trainer, ABC):
+                 "stds": [3.38, 1.41],
+                 "compression": [None, "log"],
+             },
++            "turbulent_radiative_layer_2D": {
++                "means": [-0.4984], # log10(t_cool) over the 9-value grid
++                "stds": [0.6456],
++                "compression": ["log"],
++            },
+         }
+         assert self.cfg.dataset.name in STATS, f"label stats for {self.cfg.dataset.name} not found"
+         self.label_stats = STATS[self.cfg.dataset.name]
