@@ -66,6 +66,9 @@ METHODS = [
     # Ablation: VICReg alignment weight lowered 25 -> 5 (capacity-cap suspect #2:
     # the invariance objective strength itself).
     MethodSpec("fae_vicreg_sim5",     "FAE+VICReg-s5",   "fae", "model", True, True),
+    # Capacity-cap fix: learned 8-query readout trained under VICReg (tests
+    # whether the mean-pool readout, not the encoder, caps usable dimension).
+    MethodSpec("fae_vicreg_q8",       "FAE+VICReg-q8",   "fae", "model", True, True),
 ]
 METHODS_BY_NAME = {m.name: m for m in METHODS}
 
@@ -121,6 +124,9 @@ def encode(model, kind: str, u_field, full_coords, idx=None, n_sensors: int = 25
         coords_in = full_coords[idx]
         if kind == "fae":
             tok = model.encoder(u_field[:, idx].unsqueeze(-1), coords_in)
+            # honor a learned readout if the model has one (else mean-pool)
+            if getattr(model, "readout", None) is not None:
+                return model.represent(tok)
             return tok.mean(dim=1)
         return model.encoder(u_field[:, idx].unsqueeze(-1),
                                 coords_in.unsqueeze(0).expand(B, -1, -1))

@@ -53,10 +53,10 @@ def off_diagonal(x):
     return x.flatten()[:-1].view(n - 1, n + 1)[:, 1:].flatten()
 
 
-def vicreg_terms(projector, tA, tB, B):
-    """Projected VICReg terms on pooled latents of the two views."""
-    xz = projector(tA.mean(dim=1))
-    yz = projector(tB.mean(dim=1))
+def vicreg_terms(projector, rA, rB, B):
+    """Projected VICReg terms on the two views' representations rA, rB."""
+    xz = projector(rA)
+    yz = projector(rB)
     l_repr = F.mse_loss(xz, yz)
     xz = xz - xz.mean(0); yz = yz - yz.mean(0)
     std_x = torch.sqrt(xz.var(0) + 1e-4)
@@ -77,7 +77,7 @@ def train_one(method, out_path, epochs=20, batch=32, lr=5e-4,
                 mcnt_choices=(64, 128, 256, 512, 1024),
                 sim_coeff=25.0, std_coeff=25.0, cov_coeff=1.0, lam_rec=1.0,
                 decoder_kind="senseiver", decoder_num_blocks=2,
-                decoder_mlp_mult=2):
+                decoder_mlp_mult=2, readout_queries=0):
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     device = f"cuda:{gpu}" if torch.cuda.is_available() else "cpu"
     print(f"=== {method} on G1 multi-PDE (device={device}) ===", flush=True)
@@ -94,14 +94,16 @@ def train_one(method, out_path, epochs=20, batch=32, lr=5e-4,
 
     fae_cfg = dict(FAE_CONFIG, decoder_kind=decoder_kind,
                     decoder_num_blocks=decoder_num_blocks,
-                    decoder_mlp_mult=decoder_mlp_mult)
+                    decoder_mlp_mult=decoder_mlp_mult,
+                    readout_queries=readout_queries)
+    rep_dim = 320 * readout_queries if readout_queries > 0 else 320
     projector = None
     if method == "fae_recon":
         model = FAE(**fae_cfg).to(device)
         recipe = "sparse_recon"
     elif method == "fae_vicreg":
         model = FAE(**fae_cfg).to(device)
-        projector, _ = make_projector(320, "8192-8192-8192")
+        projector, _ = make_projector(rep_dim, "8192-8192-8192")
         projector = projector.to(device)
         recipe = "sparse_vicreg"
     elif method == "mlp":
@@ -173,7 +175,8 @@ def train_one(method, out_path, epochs=20, batch=32, lr=5e-4,
                 pA, tA = model(u_A, full_coords[idx_A], q_coords)
                 pB, tB = model(u_B, full_coords[idx_B], q_coords)
                 l_rec = 0.5 * (((pA - target) ** 2).mean() + ((pB - target) ** 2).mean())
-                l_repr, l_std, l_cov = vicreg_terms(projector, tA, tB, B)
+                l_repr, l_std, l_cov = vicreg_terms(
+                    projector, model.represent(tA), model.represent(tB), B)
                 loss = (lam_rec * l_rec + sim_coeff * l_repr
                           + std_coeff * l_std + cov_coeff * l_cov)
                 opt.zero_grad(); loss.backward()
@@ -256,6 +259,9 @@ def main():
                      help="number of CViT decoder blocks (ignored if senseiver)")
     ap.add_argument("--decoder_mlp_mult", type=int, default=2,
                      help="MLP expansion in CViT decoder (ignored if senseiver)")
+    ap.add_argument("--readout_queries", type=int, default=0,
+                     help="0 = mean-pool representation; K>0 = learned K-query "
+                          "readout (representation = flattened K*320)")
     args = ap.parse_args()
     train_one(method=args.method, out_path=args.out, epochs=args.epochs,
                 batch=args.batch, lr=args.lr, warmup_epochs=args.warmup_epochs,
@@ -266,7 +272,8 @@ def main():
                 mcnt_choices=tuple(args.mcnt_choices),
                 decoder_kind=args.decoder_kind,
                 decoder_num_blocks=args.decoder_num_blocks,
-                decoder_mlp_mult=args.decoder_mlp_mult)
+                decoder_mlp_mult=args.decoder_mlp_mult,
+                readout_queries=args.readout_queries)
 
 
 if __name__ == "__main__":

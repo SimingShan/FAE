@@ -321,6 +321,34 @@ class CViTDecoder(nn.Module):
 
 
 # ----------------------------------------------------------------------
+# Learned multi-query readout (optional)
+# ----------------------------------------------------------------------
+class QueryReadout(nn.Module):
+    """K learnable query tokens cross-attend the M encoder tokens -> (B, K, dim).
+
+    The mean-pool readout discards capacity the encoder retains (the latent
+    tokens carry intrinsic dim ~22, the mean ~10) and that capacity is NOT
+    linearly accessible post-hoc. A readout trained end-to-end UNDER the SSL
+    pressure can reorganize the token set into K*dim linearly-usable
+    coordinates. Representation = flatten(forward(tokens)).
+    """
+    def __init__(self, dim, num_queries=8, num_heads=4, depth=1, dropout=0.0):
+        super().__init__()
+        self.queries = nn.Parameter(torch.empty(1, num_queries, dim))
+        with torch.no_grad():
+            self.queries.normal_(0.0, 0.02).clamp_(-2.0, 2.0)
+        self.layers = nn.ModuleList([
+            CrossLayer(dim, dim, num_heads, dropout) for _ in range(depth)])
+        self.num_queries = num_queries
+
+    def forward(self, tokens):                  # (B, M, dim) -> (B, K, dim)
+        q = self.queries.expand(tokens.size(0), -1, -1)
+        for layer in self.layers:
+            q = layer(q, tokens)
+        return q
+
+
+# ----------------------------------------------------------------------
 # Full autoencoder
 # ----------------------------------------------------------------------
 class FAE(nn.Module):
@@ -343,7 +371,7 @@ class FAE(nn.Module):
                   dec_n_freq=32, dec_max_freq=32, dec_num_heads=4,
                   num_latents=128, dropout=0.0, coord_dim=2,
                   decoder_kind="senseiver", decoder_num_blocks=2,
-                  decoder_mlp_mult=2):
+                  decoder_mlp_mult=2, readout_queries=0):
         super().__init__()
         self.encoder = FAEEncoder(
             emb_dim=emb_dim, num_iter=num_iter, depth_per_iter=depth_per_iter,
@@ -369,6 +397,17 @@ class FAE(nn.Module):
         self.emb_dim = emb_dim
         self.num_latents = num_latents
         self.coord_dim = coord_dim
+        # Optional learned readout (0 = mean-pool, the default representation).
+        self.readout = (QueryReadout(emb_dim, readout_queries)
+                          if readout_queries > 0 else None)
+        self.readout_queries = readout_queries
+
+    def represent(self, tokens):
+        """Pooled representation used downstream: mean-pool, or flattened
+        learned readout when one is configured."""
+        if self.readout is not None:
+            return self.readout(tokens).flatten(1)      # (B, K*emb_dim)
+        return tokens.mean(dim=1)                        # (B, emb_dim)
 
     def forward(self, u, in_coords, query_coords):
         tokens = self.encoder(u, in_coords)
