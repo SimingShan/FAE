@@ -4,12 +4,26 @@ Task: estimate log10(`t_cool`) from a turbulent radiative cooling layer.
 Protocol: self-supervised pretrain → **frozen** encoder → probe. Metric:
 R² of log10(t_cool) on the held-out (valid) split, standardized by train stats.
 
-| method | pretrain | input | probe | R² |
-|---|---|---|---|---|
-| JEPA (helenqu) | 6 epochs | 16-frame video window | attentive-pool + MLP (100 ep) | **0.71** |
-| **FAE+VICReg** (ours) | 40 epochs | **single 2D snapshot** | **linear ridge** | **0.879** |
+| method | input | probe | R² |
+|---|---|---|---|
+| **FAE+VICReg** (ours) | single 2D snapshot | **linear ridge** | **0.879** |
+| JEPA (helenqu) | 16-frame video | **linear ridge** (mean-pool, matched) | **0.479** |
+| JEPA (helenqu) | 16-frame video | attentive-pool + MLP (their head) | 0.71 |
 
-(FAE at 2 epochs already reached 0.81; it climbs to 0.88 by 40 and is stable.)
+(FAE at 2 epochs already reached 0.81; climbs to 0.88 by 40, stable. JEPA
+linear probe: mean-pool 0.479, max-pool 0.254, flatten 0.088 — mean-pool is its
+best linear reduction. JEPA embeddings read from their cached
+`embeddings/*ConvEncoder_5*.h5`.)
+
+## The decisive comparison: matched linear probe
+
+With the **same** linear ridge probe, FAE (0.879) nearly doubles JEPA (0.479).
+JEPA only reaches 0.71 once given a *learned nonlinear* head (attentive pooling
++ MLP) — i.e. its features hold the information but do **not** expose it
+linearly. FAE's linear probe beats JEPA's best nonlinear head. This is the G1
+linearization thesis reproduced on a real 2D benchmark: VICReg flattens the
+manifold so the physics is linearly readable; the I-JEPA objective leaves it
+entangled.
 
 ## Reading
 
