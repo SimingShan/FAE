@@ -33,15 +33,23 @@ pip install -e .                           # if you want `import src...` without
 export THE_WELL_DATA_DIR=/cluster/path/to/the_well_data    # used by src/data/well2d.py AND the harness
 ```
 
+We focus on **shear_flow, FULL data** — all 28 (Reynolds × Schmidt) combinations
+× 40 ICs (4 Re × 7 Sc), matching the source paper's Table 1 setup so our MSE is
+same-standard on the data axis. **Do NOT prune** (the earlier 189 GB
+Schmidt-subset was a PoC only). Budget ~440 GB of disk for it.
+
 | dataset | size | how to get it on the cluster |
 |---|---|---|
-| G1 1D (`data/1d/*_g1.h5`) | 6.5 GB | **regenerate**: `python data_gen/gen_g1_all.py` (GPU spectral solvers, deterministic) — do NOT rsync |
-| The Well `turbulent_radiative_layer_2D` | 7.4 GB | `huggingface_hub.snapshot_download("polymathic-ai/turbulent_radiative_layer_2D", repo_type="dataset", local_dir=$THE_WELL_DATA_DIR/turbulent_radiative_layer_2D, allow_patterns=["data/*"])` |
-| The Well `shear_flow` | ~440 GB full / **189 GB pruned** | same snapshot_download for `polymathic-ai/shear_flow`, then prune to the PoC grid (keep `Schmidt_{1e-1,1e0,1e1}`, all 4 Reynolds) — see `scripts/_queue/` history or just delete other Schmidt files |
+| **The Well `shear_flow` (FULL — primary)** | **~440 GB** | `huggingface_hub.snapshot_download("polymathic-ai/shear_flow", repo_type="dataset", local_dir=$THE_WELL_DATA_DIR/shear_flow, allow_patterns=["data/*"])` — **all** files, no pruning. (HF's "114.7 GB ensemble" understates the HDF5 ~4×; real footprint ~440 GB.) |
+| The Well `turbulent_radiative_layer_2D` | 7.4 GB | `snapshot_download("polymathic-ai/turbulent_radiative_layer_2D", ...)` — sandbox only |
+| G1 1D (`data/1d/*_g1.h5`) | 6.5 GB | archived line; **regenerate** if needed: `python arxiv/data_gen/gen_g1_all.py` |
 
-trl_2D is a known **saturated/trivial** probe (random-init encoder ~0.91) — keep
-it only as a sandbox. shear_flow is the **discriminating** benchmark (random
-baselines ~0). See `docs/benchmarks/RESULTS_TRL2D.md`.
+shear_flow is the **discriminating** benchmark (trivial baselines R² ~0 for
+Re/Sc). trl_2D is **saturated/trivial** (random-init encoder ~0.91 on t_cool) —
+sandbox only, no method conclusions. The data loaders
+(`ShearFlowSnapshotDataset` / `ShearFlowWindowDataset`) glob all files in
+`data/{train,valid,test}`, so full data needs **no code change** — just download
+everything.
 
 ## 4. External harness (helenqu JEPA baseline)
 
@@ -65,23 +73,39 @@ Harness gotchas (cost us time, don't rediscover):
 
 ## 5. What to move vs regenerate
 
-- **Regenerate** (cheap, deterministic): G1 1D data.
-- **Re-download**: The Well datasets (HF).
-- **Move only if you want to skip retraining**: `results/checkpoints/g1/` (3.5 GB,
-  gitignored) — FAE/JEPA checkpoints. Otherwise retrain from scratch.
-- **Don't move**: `../WFAE_attic/` (old material), `logs/`, `__pycache__`.
+- **Re-download**: shear_flow FULL (~440 GB) — the primary dataset.
+- **Don't move**: results/plots/weights (gitignored — retrain on the cluster),
+  `../WFAE_attic/`, `logs/`, `__pycache__`, the pruned shear_flow subset.
 
-## 6. Reproduce the current results
+## 6. The experiment matrix on the cluster (full shear_flow)
+
+Single-frame first, then spatio-temporal. Every run reports linear-probe
+R²/MSE + PR + trivial baseline via `scripts/eval_linear_probe.py`.
 
 ```bash
-python scripts/train_fae_shear.py --epochs 60 --tag v1          # FAE on shear (GPU, ~20 min)
-# JEPA on shear (their harness, 10 ep ~ 8h on one GPU at 224²):
-cd external/physical-representation-learning
-THE_WELL_DATA_DIR=$THE_WELL_DATA_DIR CUDA_VISIBLE_DEVICES=0 torchrun --nproc_per_node=1 --standalone \
-    -m physics_jepa.train_jepa configs/train_shear_auth.yaml
+export THE_WELL_DATA_DIR=/cluster/path/to/the_well_data
+# FAE+VICReg (ours) — snapshot, then spatio-temporal:
+python scripts/train_fae_shear.py --epochs 60 --n_seed 32 --tag full
+python scripts/train_fae_shear.py --temporal --n_frames 4 --tag full_t
+# baselines (train, then eval_linear_probe --method {mae,ae,ijepa}):
+#   MAE/AE: benchmarks/mae;  single-frame I-JEPA: benchmarks/jepa;
+#   spatio-temporal JEPA: helenqu harness (configs/train_shear_auth.yaml,
+#   num_frames 4 or 16 — cluster GPUs allow full 16-frame/224², which our
+#   24 GB dev box could not).
+python scripts/eval_linear_probe.py --method fae --ckpt results/checkpoints/g1/fae_vicreg_shear_full.pt
+python scripts/eval_linear_probe.py --method trivial        # the floor
 ```
 
-Standing state at migration: FAE shear done (PR 6.3, logRe 0.21, logSc 0.41 vs
-random ~0); JEPA shear was mid-run (10-epoch config) when we stopped to migrate.
-G1 1D results are final and stand.
-```
+Harness gotchas (don't rediscover): JEPA ConvEncoder needs num_frames ∈ {4,16};
+their "finetune" is a frozen-encoder probe; for a same-standard MSE, run their
+MLP finetune (not just our linear ridge) and use their label normalization
+(shear means [4.85, 2.69], stds [0.61, 3.38], compression [log, None]).
+
+## Standing state at migration
+
+Repo is algorithm + eval only (results/plots/weights gitignored, G1 1D line in
+`arxiv/`). On the dev box, FAE shear on the PRUNED subset gave linear-probe
+MSE ~0.69 (logRe R² 0.21 / logSc R² 0.41) — ≈ VideoMAE, below the paper's JEPA
+(MSE 0.38), and NOT same-standard (pruned data, linear vs MLP probe, single
+frame). The cluster job: the full matrix on FULL shear_flow, param-matched
+(~ViT-Tiny 5.5M), with PR + trivial guards — that is the first real comparison.
