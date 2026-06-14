@@ -18,9 +18,15 @@ cd $SCRATCH
 cd $REPO
 
 # ===== 2. conda env -> project =====
-module load miniconda || module load anaconda || true     # adapt: `module avail` to find it
-conda create -y --prefix $ENV_PREFIX python=3.11
+# NOTE: plain `conda create` gets OOM-KILLED on login nodes (classic solver
+# loads conda-forge+bioconda repodata into RAM). Use libmamba + conda-forge
+# only; if still killed, run this inside an `srun --pty --mem=16G bash` job.
+module load miniconda || module load anaconda || true     # adapt: `module avail`
+conda config --set solver libmamba
+conda create -y --prefix $ENV_PREFIX -c conda-forge --override-channels python=3.11
 conda activate $ENV_PREFIX
+# Alternative (no conda): module load python/3.11 && python -m venv $ENV_PREFIX
+#                         && source $ENV_PREFIX/bin/activate
 
 # ===== 3. PyTorch (match the cluster CUDA — check `nvidia-smi`) + deps =====
 pip install torch==2.4.0 torchvision --index-url https://download.pytorch.org/whl/cu124
