@@ -1,56 +1,56 @@
 # Results — turbulent_radiative_layer_2D (cooling-time estimation)
 
 Task: estimate log10(`t_cool`) from a turbulent radiative cooling layer.
-Protocol: self-supervised pretrain → **frozen** encoder → probe. Metric:
-R² of log10(t_cool) on the held-out (valid) split, standardized by train stats.
+Protocol: self-supervised pretrain -> **frozen** encoder -> probe. PR =
+participation ratio of the probed representation (collapse check; healthy >~10).
 
-| method | input | probe | R² |
-|---|---|---|---|
-| **FAE+VICReg** (ours) | single 2D snapshot | **linear ridge** | **0.879** |
-| JEPA (helenqu) | 16-frame video | **linear ridge** (mean-pool, matched) | **0.479** |
-| JEPA (helenqu) | 16-frame video | attentive-pool + MLP (their head) | 0.71 |
+## Corrected result (2026-06-14) — NO valid FAE win; FAE collapses here
 
-(FAE at 2 epochs already reached 0.81; climbs to 0.88 by 40, stable. JEPA
-linear probe: mean-pool 0.479, max-pool 0.254, flatten 0.088 — mean-pool is its
-best linear reduction. JEPA embeddings read from their cached
-`embeddings/*ConvEncoder_5*.h5`.)
+| method | pretrain | linear probe R² | nonlinear probe R² | PR |
+|---|---|---|---|---|
+| **JEPA authentic** | 40 ep | **0.78** | **0.81** | **45.8** (rich) |
+| FAE+VICReg (best of 7 anti-collapse configs) | 40–60 ep | 0.87–0.94 | — | **≤ 5.9 (COLLAPSED)** |
 
-## The decisive comparison: matched linear probe
+**The FAE numbers are invalid** — its latent is collapsed (PR ≤ 6), so the high
+probe R² is a "detector" artifact (latent collapsed onto the t_cool axis), not a
+representation-quality win. Confirmed by t-SNE (`tsne_trl2d_fae_vs_jepa.png`) and
+PR across all 7 sweep configs (snapshot + spatiotemporal): 2.5–5.9, none > 8.
 
-With the **same** linear ridge probe, FAE (0.879) nearly doubles JEPA (0.479).
-JEPA only reaches 0.71 once given a *learned nonlinear* head (attentive pooling
-+ MLP) — i.e. its features hold the information but do **not** expose it
-linearly. FAE's linear probe beats JEPA's best nonlinear head. This is the G1
-linearization thesis reproduced on a real 2D benchmark: VICReg flattens the
-manifold so the physics is linearly readable; the I-JEPA objective leaves it
-entangled.
+## What was wrong with the earlier (retracted) "FAE 0.88 vs JEPA 0.48"
 
-## Reading
+1. **JEPA was undertrained.** At 6 epochs its linear probe was 0.48; trained
+   authentically (40 ep, val loss 18.6->10.2) it is **0.78** with PR 45.8 — its
+   features are linearly accessible. The "JEPA needs a nonlinear head" claim is
+   withdrawn.
+2. **FAE was collapsed.** PR 1.49 — the 0.88 was a detector artifact.
 
-FAE+VICReg beats the JEPA baseline, and the *manner* of the win is the thesis:
+Both legs were flawed (h/t the instinct to train JEPA authentically AND check
+FAE for collapse — both were necessary).
 
-- **Single snapshot vs 16-frame video** — FAE recovers the cooling time from one
-  frame; JEPA uses a temporal window.
-- **Linear ridge vs MLP probe** — FAE wins with the *weaker* probe, i.e. the
-  physics is **linearly accessible** in its latent. (Same mechanism as G1:
-  VICReg's variance/covariance terms flatten the manifold.)
-- FAE is `coord_dim`-agnostic; the only extension needed for 2D multi-channel
-  was `in_chans` (val_proj / decoder head), 7.0M params, parity preserved.
+## Anti-collapse sweep (snapshot + spatiotemporal), all COLLAPSED
 
-## Caveats (PoC, not a faithful benchmark)
+| config | PR | probe (contaminated) |
+|---|---|---|
+| recononly (no VICReg) | 2.49 | 0.902 |
+| lowsim (sim 1) | 5.58 | 0.874 |
+| strongvar (std 100, cov 10) | 5.16 | 0.872 |
+| highrec (lam_rec 10) | 4.19 | 0.890 |
+| combo (n_freq 32) | 5.89 | 0.884 |
+| st_strongvar (spatiotemporal) | 3.54 | 0.945 |
+| st_combo (spatiotemporal) | 5.49 | 0.941 |
 
-1. **Single seed**, one configuration each.
-2. The JEPA number is from a **quick 6-epoch** pretrain on our hardware, not the
-   paper's optimized result — treat 0.71 as a re-run baseline, not their
-   headline.
-3. The inputs differ (snapshot vs video) and the probes differ (ridge vs MLP),
-   so this is "each method in its natural setup", not a perfectly controlled
-   ablation. A controlled version would run both through an identical probe and
-   matched pretraining budget.
-4. Coarse task: 9 distinct t_cool values.
+Mechanism: recon-only gives PR 2.5; VICReg variants reach ~6 (so VICReg *helps*
+spread, it is not the cause of collapse). The encoder underuses its capacity on
+2D turbulent fields — open problem.
 
-Strong enough as a proof that FAE is competitive-to-better on a recognized 2D
-physics benchmark; the controlled version is the follow-up.
+## Standing conclusions
 
-Artifacts: `results/checkpoints/g1/fae_vicreg_trl2d.pt`,
-`logs/fae_vicreg_trl2d.log`, `logs/trl2d_jepa_{train,finetune}.log`.
+- **G1 (1D) results stand** — FAE+VICReg has PR ~20 there (genuinely rich); the
+  probe/invariance/dimension findings are real. FAE works in 1D.
+- **FAE+VICReg does NOT transfer to 2D turbulence as-is** — it collapses (PR ≤ 6
+  even after anti-collapse tuning). A genuine limitation.
+- **JEPA authentic is a strong, healthy baseline** on this benchmark (PR 45.8,
+  linear 0.78) — not the weak baseline the undertrained run suggested.
+
+Artifacts: `logs/night_fae_*.log`, `logs/night_jepa_auth_*.log`,
+`results/probes/g1/tsne_trl2d_fae_vs_jepa.png`.

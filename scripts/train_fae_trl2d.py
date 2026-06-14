@@ -1,11 +1,13 @@
-"""FAE+VICReg on The Well turbulent_radiative_layer_2D (2D, 4-channel).
+"""FAE+VICReg on The Well turbulent_radiative_layer_2D — snapshot (2D) or
+spatiotemporal (3D) — with collapse monitoring (participation ratio).
 
-Self-supervised pretraining (two independent sensor views + VICReg) on
-single 2D snapshots, then a FROZEN-encoder ridge probe of log10(t_cool) —
-the same evaluation protocol as the JEPA baseline (which on this dataset,
-6-epoch pretrain + frozen probe, gets R^2 ~ 0.71). Directly comparable.
+Self-supervised pretrain (two independent coordinate-set views + VICReg) then a
+FROZEN-encoder ridge probe of log10(t_cool). Reports the representation's
+participation ratio (PR) so a collapsed "detector" latent (PR ~ 1-2) is not
+mistaken for a genuine win: a probe number only counts if PR is healthy (>~10).
 
-Run:  CUDA_VISIBLE_DEVICES=1 python scripts/train_fae_trl2d.py
+Snapshot:       coord_dim=2 over (x, y),     in_chans=4
+Spatiotemporal: coord_dim=3 over (x, y, t),  in_chans=4   (--temporal)
 """
 from __future__ import annotations
 import sys, os, time, argparse
@@ -17,11 +19,11 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from src.models import FAE
-from src.data.well2d import TRL2DSnapshotDataset, make_coords_2d, fields_to_tokens
-from src.metrics import lin_probe, r2_score
+from src.data.well2d import (TRL2DSnapshotDataset, TRL2DWindowDataset,
+                               make_coords_2d, make_coords_3d, fields_to_tokens)
+from src.metrics import lin_probe
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-NPIX = 128 * 128
 
 
 def make_projector(in_dim, spec="8192-8192-8192"):
@@ -50,19 +52,21 @@ def vicreg(projector, rA, rB, B):
     return l_sim, l_std, l_cov
 
 
+def participation_ratio(Z):
+    Z = Z - Z.mean(0)
+    e = np.linalg.eigvalsh(Z.T @ Z / max(len(Z) - 1, 1))
+    e = np.clip(e, 0, None)
+    return float(e.sum() ** 2 / max((e ** 2).sum(), 1e-30))
+
+
 @torch.no_grad()
 def embed(model, ds, coords, idx, batch=64):
-    """Frozen pooled embeddings at a FIXED sensor subset `idx` + labels."""
     model.eval()
     c_in = coords[idx]
     Z, Y = [], []
-    loader = DataLoader(ds, batch_size=batch)
-    for fields, y in loader:
-        fields = fields.to(DEVICE)
-        vals = fields_to_tokens(fields, idx)
-        tok = model.encoder(vals, c_in)
-        Z.append(model.represent(tok).cpu().numpy())
-        Y.append(y.numpy())
+    for fields, y in DataLoader(ds, batch_size=batch):
+        tok = model.encoder(fields_to_tokens(fields.to(DEVICE), idx), c_in)
+        Z.append(model.represent(tok).cpu().numpy()); Y.append(y.numpy())
     return np.concatenate(Z), np.concatenate(Y)
 
 
@@ -72,32 +76,53 @@ def main():
     ap.add_argument("--batch", type=int, default=32)
     ap.add_argument("--lr", type=float, default=5e-4)
     ap.add_argument("--frame_stride", type=int, default=4)
-    ap.add_argument("--mcnt", type=int, nargs="+", default=[256, 512, 1024, 2048])
     ap.add_argument("--n_query", type=int, default=1024)
+    ap.add_argument("--lam_rec", type=float, default=1.0)
     ap.add_argument("--sim", type=float, default=25.0)
     ap.add_argument("--std", type=float, default=25.0)
     ap.add_argument("--cov", type=float, default=1.0)
-    ap.add_argument("--out", default="results/checkpoints/g1/fae_vicreg_trl2d.pt")
+    ap.add_argument("--n_freq", type=int, default=16)
+    ap.add_argument("--proj_dim", type=int, default=8192)
+    ap.add_argument("--readout_queries", type=int, default=0)
+    ap.add_argument("--temporal", action="store_true", help="coord_dim=3 (x,y,t) windows")
+    ap.add_argument("--n_frames", type=int, default=8)
+    ap.add_argument("--win_stride", type=int, default=8)
+    ap.add_argument("--mcnt", type=int, nargs="+", default=None)
+    ap.add_argument("--tag", default="snap")
     args = ap.parse_args()
 
-    print("=== FAE+VICReg on trl_2D (2D, 4-chan) ===", flush=True)
-    tr = TRL2DSnapshotDataset("train", frame_stride=args.frame_stride)
-    va = TRL2DSnapshotDataset("valid", frame_stride=args.frame_stride, stats=tr.stats)
-    print(f"  train {len(tr)}  valid {len(va)} snapshots", flush=True)
+    cd = 3 if args.temporal else 2
+    print(f"=== FAE+VICReg trl_2D [{args.tag}]  coord_dim={cd} in_chans=4 "
+          f"batch={args.batch} sim/std/cov={args.sim}/{args.std}/{args.cov} "
+          f"n_freq={args.n_freq} readout={args.readout_queries} ===", flush=True)
+
+    if args.temporal:
+        tr = TRL2DWindowDataset("train", n_frames=args.n_frames, win_stride=args.win_stride)
+        va = TRL2DWindowDataset("valid", n_frames=args.n_frames, win_stride=args.win_stride, stats=tr.stats)
+        coords = make_coords_3d(args.n_frames, device=DEVICE)
+        mcnt = args.mcnt or [512, 1024, 2048, 4096]
+    else:
+        tr = TRL2DSnapshotDataset("train", frame_stride=args.frame_stride)
+        va = TRL2DSnapshotDataset("valid", frame_stride=args.frame_stride, stats=tr.stats)
+        coords = make_coords_2d(device=DEVICE)
+        mcnt = args.mcnt or [256, 512, 1024, 2048]
+    NPIX = coords.shape[0]
+    print(f"  train {len(tr)}  valid {len(va)}  | grid pts {NPIX}  mcnt {mcnt}", flush=True)
     loader = DataLoader(tr, batch_size=args.batch, shuffle=True, drop_last=True,
                          num_workers=4, pin_memory=True)
-    coords = make_coords_2d(device=DEVICE)
 
     model = FAE(emb_dim=320, num_iter=4, depth_per_iter=4, num_latents=128,
-                  num_cross_heads=4, num_self_heads=8, n_freq=16, max_freq=32,
-                  coord_dim=2, in_chans=4).to(DEVICE)
-    proj = make_projector(320).to(DEVICE)
-    n_par = sum(p.numel() for p in model.parameters())
-    print(f"  FAE params: {n_par/1e6:.2f}M", flush=True)
-
+                  num_cross_heads=4, num_self_heads=8, n_freq=args.n_freq, max_freq=32,
+                  coord_dim=cd, in_chans=4, readout_queries=args.readout_queries).to(DEVICE)
+    rep_dim = 320 * args.readout_queries if args.readout_queries > 0 else 320
+    proj = make_projector(rep_dim, f"{args.proj_dim}-{args.proj_dim}-{args.proj_dim}").to(DEVICE)
     params = list(model.parameters()) + list(proj.parameters())
     opt = torch.optim.AdamW(params, lr=args.lr, weight_decay=1e-4)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.epochs)
+    print(f"  FAE params {sum(p.numel() for p in model.parameters())/1e6:.2f}M", flush=True)
+
+    g0 = torch.Generator(device=DEVICE).manual_seed(0)
+    probe_idx = torch.randperm(NPIX, generator=g0, device=DEVICE)[:min(1024, NPIX)]
 
     t0 = time.time()
     for ep in range(args.epochs):
@@ -106,45 +131,48 @@ def main():
         for fields, _y in loader:
             fields = fields.to(DEVICE, non_blocking=True)
             B = fields.size(0)
-            nA = int(np.random.choice(args.mcnt)); nB = int(np.random.choice(args.mcnt))
+            nA, nB = int(np.random.choice(mcnt)), int(np.random.choice(mcnt))
             iA = torch.randperm(NPIX, device=DEVICE)[:nA]
             iB = torch.randperm(NPIX, device=DEVICE)[:nB]
             iq = torch.randperm(NPIX, device=DEVICE)[:args.n_query]
-            target = fields_to_tokens(fields, iq)                # (B, Nq, 4)
+            target = fields_to_tokens(fields, iq)
             pA, tA = model(fields_to_tokens(fields, iA), coords[iA], coords[iq])
             pB, tB = model(fields_to_tokens(fields, iB), coords[iB], coords[iq])
             l_rec = 0.5 * (F.mse_loss(pA, target) + F.mse_loss(pB, target))
             l_sim, l_std, l_cov = vicreg(proj, model.represent(tA), model.represent(tB), B)
-            loss = l_rec + args.sim * l_sim + args.std * l_std + args.cov * l_cov
+            loss = args.lam_rec * l_rec + args.sim * l_sim + args.std * l_std + args.cov * l_cov
             opt.zero_grad(); loss.backward()
             nn.utils.clip_grad_norm_(params, 1.0); opt.step()
             for k, v in [("rec", l_rec), ("sim", l_sim), ("std", l_std), ("cov", l_cov)]:
                 agg[k] += float(v) * B
             agg["n"] += B
         sched.step()
-        n = agg["n"]
-        print(f"ep {ep+1:3d}/{args.epochs}  rec={agg['rec']/n:.4e} sim={agg['sim']/n:.4e} "
-              f"std={agg['std']/n:.4e} cov={agg['cov']/n:.4e}  ({time.time()-t0:.0f}s)", flush=True)
+        if (ep + 1) % 5 == 0 or ep == 0:
+            Ztr, _ = embed(model, tr, coords, probe_idx)
+            pr = participation_ratio(Ztr)
+            n = agg["n"]
+            print(f"ep {ep+1:3d}/{args.epochs}  rec={agg['rec']/n:.3e} sim={agg['sim']/n:.3e} "
+                  f"std={agg['std']/n:.3e} cov={agg['cov']/n:.3e}  PR={pr:.1f}  "
+                  f"({time.time()-t0:.0f}s)", flush=True)
 
-    os.makedirs(os.path.dirname(args.out), exist_ok=True)
-    torch.save({"method": "fae_vicreg_trl2d", "model": model.state_dict(),
+    out = f"results/checkpoints/g1/fae_vicreg_trl2d_{args.tag}.pt"
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    torch.save({"model": model.state_dict(),
                   "config": dict(emb_dim=320, num_iter=4, depth_per_iter=4, num_latents=128,
-                                   num_cross_heads=4, num_self_heads=8, n_freq=16, max_freq=32,
-                                   coord_dim=2, in_chans=4),
-                  "stats": tr.stats}, args.out)
-    print(f"saved {args.out}", flush=True)
+                                   num_cross_heads=4, num_self_heads=8, n_freq=args.n_freq, max_freq=32,
+                                   coord_dim=cd, in_chans=4, readout_queries=args.readout_queries),
+                  "stats": tr.stats, "args": vars(args)}, out)
 
-    # ---- frozen-encoder probe of log10(t_cool) ----
-    print("\n=== frozen FAE probe (log10 t_cool) ===", flush=True)
-    g = torch.Generator(device=DEVICE).manual_seed(0)
-    probe_idx = torch.randperm(NPIX, generator=g, device=DEVICE)[:1024]  # fixed for train+val
+    # ---- frozen probe + PR ----
     Ztr, Ytr = embed(model, tr, coords, probe_idx)
     Zva, Yva = embed(model, va, coords, probe_idx)
-    # standardize labels by train stats (match JEPA's normalized-MSE -> R^2)
+    pr_tr = participation_ratio(Ztr)
     ym, ys = Ytr.mean(), Ytr.std() + 1e-8
     r2 = lin_probe(Ztr, (Ytr - ym) / ys, Zva, (Yva - ym) / ys)
-    print(f"  FAE+VICReg  linear-probe R^2(log10 t_cool) = {r2:.3f}", flush=True)
-    print(f"  [JEPA baseline on same dataset: R^2 ~ 0.71]", flush=True)
+    verdict = "GENUINE" if pr_tr > 8 else "COLLAPSED (probe invalid)"
+    print(f"\n=== [{args.tag}] PR={pr_tr:.2f}  linear-probe R^2(log10 t_cool)={r2:.3f}  "
+          f"-> {verdict} ===", flush=True)
+    print(f"  saved {out}", flush=True)
 
 
 if __name__ == "__main__":
