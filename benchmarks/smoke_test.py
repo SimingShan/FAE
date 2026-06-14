@@ -44,6 +44,23 @@ def main():
     lossA.backward()
     print("  backward OK")
 
+    print("=== 2D I-JEPA (single-frame) ===")
+    from benchmarks.jepa.ijepa2d import ijepa2d_physics, sample_masks
+    import torch.nn.functional as F
+    j = ijepa2d_physics()
+    ne = sum(p.numel() for p in j.encoder.parameters())/1e6
+    print(f"  encoder={ne:.2f}M  predictor={sum(p.numel() for p in j.predictor.parameters())/1e6:.2f}M  patches={j.num_patches}")
+    ok &= 4.0 < ne < 8.0
+    ctx, tgt = sample_masks(2, j.num_patches, 40, 12, "cpu")
+    pred, h = j(x, ctx, tgt)
+    print(f"  pred={tuple(pred.shape)} target={tuple(h.shape)} (expect (2,12,256))")
+    ok &= pred.shape == h.shape == (2, 12, 256)
+    lossJ = F.smooth_l1_loss(pred, h); lossJ.backward()
+    b = j.target.blocks[0].mlp.fc1.weight.clone(); j.update_target(0.99)
+    moved = (j.target.blocks[0].mlp.fc1.weight - b).abs().sum().item()
+    print(f"  smooth_l1={lossJ.item():.4f}  EMA moved={moved:.2e}  encode={tuple(j.encode(x).shape)}  backward OK")
+    ok &= moved > 0 and j.encode(x).shape == (2, 256)
+
     print("\n" + ("ALL SMOKE TESTS PASSED" if ok else "SMOKE TEST FAILURES — check above"))
     sys.exit(0 if ok else 1)
 

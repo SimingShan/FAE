@@ -8,8 +8,15 @@ Each is the *original algorithm*, not a re-implementation.
 |---|---|---|---|
 | **MAE** | masked reconstruction | facebookresearch/mae (Kaiming He et al.) | `benchmarks/mae/mae.py` |
 | **AE** | reconstruction (full) | MAE backbone, `mask_ratio=0` | `benchmarks/mae/mae.py` (`ae_physics`) |
-| **JEPA** | latent prediction | helenqu/physical-representation-learning | `external/physical-representation-learning/` (see `docs/benchmarks/`) |
+| **JEPA** (spatio-temporal) | latent prediction (3D conv) | helenqu/physical-representation-learning | `external/physical-representation-learning/` (see `docs/benchmarks/`) |
+| **I-JEPA** (single-frame) | latent prediction (2D ViT) | original I-JEPA recipe, our 2D port | `benchmarks/jepa/ijepa2d.py` |
 | FAE+VICReg | recon + invariance | ours | `src/models/fae.py` |
+
+Single-frame experiment uses MAE / AE / **I-JEPA** (2D) / FAE; spatio-temporal
+uses the helenqu 3D-conv JEPA (and FAE `--temporal`, coord_dim=3, via
+`ShearFlowWindowDataset`). Note the two JEPAs differ by design: helenqu does
+genuine 3D convolution (time downsampled with Conv3d, frames ∈ {4,16}); the
+single-frame I-JEPA is the original image recipe.
 
 ## MAE / AE
 
@@ -34,9 +41,22 @@ z = mae.encode(x)                   # frozen representation for the probe (mean 
 
 Verify with `python benchmarks/smoke_test.py`.
 
-## JEPA
+## JEPA / I-JEPA
 
-Already handled the same way (original GitHub code): cloned to `external/`,
-wired into our trl_2D/shear_flow harness via `docs/benchmarks/`. Its ConvEncoder
-is spatio-temporal (num_frames ∈ {4,16}); a single-frame 2D I-JEPA still needs
-building (1D template at `src/models/jepa_vit.py`).
+- **Spatio-temporal JEPA**: helenqu's 3D-conv model, cloned to `external/`, wired
+  via `docs/benchmarks/`. Genuine spatio-temporal — `nn.Conv3d` throughout,
+  downsampling time→1 (num_frames ∈ {4,16}, hardcoded schedule).
+- **Single-frame I-JEPA** (`benchmarks/jepa/ijepa2d.py`): the original image
+  recipe — ViT over 2D patches, EMA target encoder sees the full image, context
+  encoder + predictor fill target patches, smooth-L1 on LayerNorm'd target
+  features, no pixel recon. Same recipe as our faithful 1D port
+  (`src/models/jepa_vit.py`), extended to 2D. `encoder=5.0M` (parity).
+
+```python
+from benchmarks.jepa.ijepa2d import ijepa2d_physics, sample_masks
+m = ijepa2d_physics()
+ctx, tgt = sample_masks(B, m.num_patches, n_ctx=40, n_tgt=12, device)
+pred, target = m(imgs, ctx, tgt)         # smooth_l1_loss(pred, target)
+m.update_target(tau)                     # per-iter EMA
+z = m.encode(imgs)                       # frozen probe representation
+```

@@ -90,22 +90,32 @@ def main():
     ap.add_argument("--proj_dim", type=int, default=4096)
     ap.add_argument("--mcnt", type=int, nargs="+", default=[256, 512])
     ap.add_argument("--n_seed", type=int, default=24)
+    ap.add_argument("--temporal", action="store_true", help="coord_dim=3 (x,y,t) windows")
+    ap.add_argument("--n_frames", type=int, default=4)
     ap.add_argument("--tag", default="shear")
     args = ap.parse_args()
-    NPIX = 128 * 128
+    cd = 3 if args.temporal else 2
 
-    print(f"=== FAE+VICReg shear_flow [{args.tag}]  batch={args.batch} "
+    print(f"=== FAE+VICReg shear_flow [{args.tag}]  coord_dim={cd} batch={args.batch} "
           f"sim/std/cov={args.sim}/{args.std}/{args.cov} n_freq={args.n_freq} ===", flush=True)
-    tr = ShearFlowSnapshotDataset("train", n_seed=args.n_seed, frame_stride=12, side=128)
-    va = ShearFlowSnapshotDataset("valid", n_seed=8, frame_stride=12, side=128, stats=tr.stats)
-    print(f"  train {len(tr)}  valid {len(va)}", flush=True)
+    if args.temporal:
+        from src.data.well2d import ShearFlowWindowDataset, make_coords_3d
+        tr = ShearFlowWindowDataset("train", n_seed=args.n_seed, n_frames=args.n_frames, side=128)
+        va = ShearFlowWindowDataset("valid", n_seed=8, n_frames=args.n_frames, side=128, stats=tr.stats)
+        coords = make_coords_3d(args.n_frames, n_side=128, device=DEVICE)
+        NPIX = args.n_frames * 128 * 128
+    else:
+        tr = ShearFlowSnapshotDataset("train", n_seed=args.n_seed, frame_stride=12, side=128)
+        va = ShearFlowSnapshotDataset("valid", n_seed=8, frame_stride=12, side=128, stats=tr.stats)
+        coords = make_coords_2d(device=DEVICE)
+        NPIX = 128 * 128
+    print(f"  train {len(tr)}  valid {len(va)}  | grid pts {NPIX}", flush=True)
     loader = DataLoader(tr, batch_size=args.batch, shuffle=True, drop_last=True,
                          num_workers=4, pin_memory=True)
-    coords = make_coords_2d(device=DEVICE)
 
     model = FAE(emb_dim=320, num_iter=4, depth_per_iter=4, num_latents=128,
                   num_cross_heads=4, num_self_heads=8, n_freq=args.n_freq, max_freq=32,
-                  coord_dim=2, in_chans=4).to(DEVICE)
+                  coord_dim=cd, in_chans=4).to(DEVICE)
     proj = make_projector(320, args.proj_dim).to(DEVICE)
     params = list(model.parameters()) + list(proj.parameters())
     opt = torch.optim.AdamW(params, lr=args.lr, weight_decay=1e-4)
@@ -149,7 +159,7 @@ def main():
     torch.save({"model": model.state_dict(), "stats": tr.stats,
                   "config": dict(emb_dim=320, num_iter=4, depth_per_iter=4, num_latents=128,
                                    num_cross_heads=4, num_self_heads=8, n_freq=args.n_freq,
-                                   max_freq=32, coord_dim=2, in_chans=4)}, out)
+                                   max_freq=32, coord_dim=cd, in_chans=4)}, out)
     Ztr, Ytr = embed(model, tr, coords, probe_idx); Zva, Yva = embed(model, va, coords, probe_idx)
     pr = participation_ratio(Ztr); pb = probe2(Ztr, Ytr, Zva, Yva)
     print(f"\n=== [{args.tag}] PR={pr:.2f}  probe logRe={pb['logRe']:.3f} logSc={pb['logSc']:.3f} "
