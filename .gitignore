@@ -1,10 +1,18 @@
-# data & heavy artifacts (regenerable; see docs/DATA.md and zoo.py)
-data/
-results/checkpoints/
-results/figures/
-results/probes/**/emb_*.npz
-*.latest.pt
+# ---- algorithm + evaluation scripts only: no results, plots, data, weights ----
+results/                 # all metrics JSON, embeddings, figures
+*.png
+*.jpg
+*.pdf
+*.pt
+*.pth
+*.jsonl
+*.h5
+*.hdf5
+*.npz
 logs/
+data/
+dataset_cache/
+checkpoints/
 # environments / caches
 __pycache__/
 *.pyc
@@ -13,6 +21,5 @@ __pycache__/
 *.egg-info/
 wandb/
 .DS_Store
-# third-party clones live in ../WFAE_attic now
+# external clones (cloned per docs/MIGRATION.md): MAE, JEPA harness, ijepa, the_well
 external/
-archive/

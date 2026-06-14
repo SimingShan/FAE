@@ -1,77 +1,76 @@
 # CLAUDE.md — WFAE project instructions
 
-Read `README.md` first; it is accurate. This file adds the working rules and
-context an agent needs. It replaces all earlier CLAUDE versions (the old
-Stage-3 plan with burgers_shock/KS, P1/P2 and FINDINGS_v3 is dead — archived
-in `../WFAE_attic/CLAUDE_v3_old.md`).
+Read `README.md` and `docs/MIGRATION.md` first. This file is the working brief.
 
-## What this project is
+## Current focus (everything else is archived in `arxiv/`)
 
-We build **FAE — Function AutoEncoder** for PDE fields, in two flavors:
+Compare four self-supervised paradigms on **2D physics fields from The Well**,
+by **frozen-encoder linear probe of physical parameters**, with the **trivial
+baseline as the floor**:
 
-1. **FAE + VICReg** (deterministic, the working core): `src/models/fae.py`,
-   trained by `scripts/train_fae.py --method fae_vicreg`.
-2. **FAE-NP** (probabilistic, functional Neural Process with a single global
-   Gaussian z): `src/models/fae_np.py`, trained by `scripts/train_fae_np.py`.
-   Known open issue: posterior logvar saturates at its clamp upper bound
-   (σ uninformative) and the linear coefficient probe trails VICReg.
+| method | paradigm | where |
+|---|---|---|
+| **AE** | reconstruction | FAE recon-only (`train_fae_*` with sim=std=cov=0); ViT-AE in `benchmarks/mae` (mask 0) |
+| **MAE** | masked reconstruction | `benchmarks/mae/mae.py` (faithful Kaiming port) |
+| **JEPA** | latent prediction | spatio-temporal: `external/` helenqu (3D conv); single-frame: `benchmarks/jepa/ijepa2d.py` |
+| **FAE+VICReg** | recon + invariance (ours) | `src/models/fae.py` |
 
-Everything is measured on the **G1 benchmark**: the four 1D PDEs — heat,
-advection, burgers, reaction_diffusion (called **AC** in tables/discussion;
-it is Fisher-KPP, see `data_gen/gen_g1_all.py`). The paper framing is an
-*evaluation framework* for PDE representations: coefficient probes, class
-structure, consistency under partial observation, richness diagnostics
-(participation ratio, dispersion, IC-mode spectral probes), cross-config
-transfer. Reconstruction accuracy alone is treated as a weak proxy.
+Two experiments: **single-frame** (first) and **spatio-temporal**. JEPA was
+originally single-frame (I-JEPA); the helenqu JEPA is genuine 3D-conv video
+(downsamples time, frames ∈ {4,16}).
 
-## Hard rules (each one has burned us before)
+## Benchmarks
 
-1. **Fair-comparison rule.** Never compare reconstruction accuracy across
-   methods trained with different objectives. Latent-space metrics (probes,
-   classification, consistency, richness) are the only cross-method currency.
-2. **Shuffle before split.** Use `src.data.g1.train_val_split`. An ordered
-   split once produced probe R² ≈ -1e15 and cost a day.
-3. **Per-snapshot training/eval** at the mid-frame; native grid 1024.
-4. **~7M parameter parity** (≤10%) for any method added to the benchmark.
-5. **No zero-fill adapters** to give dense methods (CNN/MAE/JEPA-ViT) sparse
-   metrics in the headline tables — they get n/a. (Zero-fill appears only,
-   explicitly caveated, in the cross-config diagnostic.)
-6. **State-dict compatibility.** Model class names were modernized in the
-   2026-06 cleanup but module *attribute* names must not change, or the
-   trained checkpoints in `results/checkpoints/g1/` stop loading.
+- **shear_flow** — THE benchmark. Discriminating: trivial baselines (random
+  proj / channel means / PCA) give R² ≈ 0 for (Reynolds, Schmidt). Probe targets
+  `logRe, logSc`. Pruned PoC grid: 4 Re × 3 Sc × 32 ICs.
+- **trl_2D** — sandbox only, **saturated/trivial** (random-init encoder ~0.91 on
+  t_cool). Do not draw method conclusions from it.
 
-## How things are wired
+## Evaluation = linear probe + trivial baseline ONLY
 
-- `src/models/zoo.py` is the single place that knows how to load and encode
-  every benchmark method. Scripts iterate `zoo.METHODS`; do not re-implement
-  per-method loaders in scripts.
-- Checkpoint files are named `<method>.pt` under `results/checkpoints/g1/`:
-  fae_recon, fae_vicreg, fae_spatiotemporal (T2), mlp, cnn, mae,
-  jepa_perceiver, jepa_vit, plus fae_np_b1e-4 / fae_np_b1e-3.
-- The pooled representation is `tokens.mean(dim=1)` for FAE-family models,
-  `mu` of q(z|C) for FAE-NP, target-branch mean-pool for JEPA models.
-- Results JSONs/figures land in `results/probes/g1/`; written findings go to
-  `docs/results/`.
+`scripts/eval_linear_probe.py`: per method, frozen embedding → ridge probe of
+(logRe, logSc) → R² and **MSE on standardized labels** (same standard as the
+paper's Table 1; trivial predictor → MSE 1.0), plus **participation ratio**
+(collapse guard). Richer evals (consistency, dimension, IC-mode, cross-config,
+rollout) are archived in `arxiv/` — out of scope now.
 
-## Naming history (for reading old artifacts)
+## Hard rules (each cost us real time)
 
-The 2026-06-10 cleanup renamed v3→fae and v4→fae_np everywhere:
-`v3_recon→fae_recon`, `v3_vicreg→fae_vicreg`,
-`v3_spatiotemporal→fae_spatiotemporal`, `jepa_perceiver_sparse→jepa_perceiver`,
-`jepa_vit1d→jepa_vit`, `v4_np*→fae_np*`. Old JSONs and the reports in
-`docs/results/` still use labels "V3-recon", "V3+VICReg", "T2 spatiotemp" —
-read them as FAE-recon / FAE+VICReg / FAE-T2. Class aliases (`V3 = FAE`,
-`V4 = FAENP`) exist in `src/models` for old notebooks.
+1. **Random/trivial baseline FIRST.** Never claim a probe result without it —
+   trl_2D's t_cool was beaten by a *random* encoder (0.91). `eval_linear_probe`
+   always prints the floor.
+2. **PR collapse check.** A high probe on a low-PR latent is a "detector"
+   artifact — unless PR ≈ the data's intrinsic dimension (compare to the data,
+   not an arbitrary threshold; FAE matched data PR ~6 on trl_2D = not collapsed).
+3. **Train baselines authentically.** A 6-epoch JEPA gave a false-weak 0.48;
+   40-epoch gave 0.78. Match a fair budget before comparing.
+4. **Param match** to ~ViT-Tiny (5.5M). FAE 7.0M / MAE 6.6M / I-JEPA enc 5.0M.
+5. **Paper-comparable MSE** = standardized-label MSE averaged over params
+   (their normalization: shear means [4.85,2.69] stds [0.61,3.38] compression
+   [log, None]). Their shear-flow MSE: JEPA 0.38, VideoMAE 0.67, DISCO 0.13.
 
-Caution: `docs/results/RESULTS_V1_BENCHMARK.md` was computed on the *old*
-PDEBench-sourced data (pre 2026-06-02 regeneration); every other report and
-all current checkpoints use the regenerated continuous-coefficient data.
+## Layout
 
-Everything removed in the cleanup (old stages, 2D/KS work, third-party
-benchmark repos, raw PDEBench files, superseded checkpoints) lives in
-`../WFAE_attic/` — see `docs/CLEANUP_MANIFEST.md` for the full mapping.
+```
+src/      models/fae.py (FAE), data/well2d.py (Well 2D datasets),
+          metrics/probes.py (lin_probe, r2_score)
+benchmarks/  mae/mae.py (MAE+AE), jepa/ijepa2d.py (single-frame I-JEPA), smoke_test.py
+scripts/  train_fae_shear.py, train_fae_trl2d.py (FAE; --temporal=coord_dim 3),
+          eval_linear_probe.py
+external/ (gitignored) physical-representation-learning (JEPA), mae, the_well_data
+arxiv/    G1 1D line + rich evals (tracked, organized, not current)
+```
 
-## Stage-1/2 conventions that still hold
+The repo tracks **only algorithm + eval code** — results, plots, weights, data
+are gitignored (regenerate; see docs/MIGRATION.md). `THE_WELL_DATA_DIR` env var
+sets the Well data root.
 
-PyTorch; AdamW + cosine with warmup; honest reporting of negative results
-(the advection-β unidentifiability finding is a feature, not a bug).
+## Standing state
+
+G1 1D results stand (archived). 2D: trl_2D is saturated (dead end); shear_flow
+is live — FAE single-frame linear-probe MSE ~0.69 (≈ VideoMAE, below JEPA 0.38),
+**not competitive yet** and not same-standard (pruned data, linear vs MLP probe,
+single-frame vs video). Real work remains: full matrix on the cluster
+(single-frame {AE,MAE,I-JEPA,FAE} then spatio-temporal), each with PR + trivial
+guards, ideally their MLP-finetune protocol for a same-standard MSE.
