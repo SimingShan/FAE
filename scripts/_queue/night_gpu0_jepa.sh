@@ -1,9 +1,9 @@
 #!/bin/bash
 set -uo pipefail
 cd "$(dirname "$0")/../../external/physical-representation-learning"
-export THE_WELL_DATA_DIR=/mnt/crucial/shansiming/project/the_well_data
+export THE_WELL_DATA_DIR=${THE_WELL_DATA_DIR:-/mnt/crucial/shansiming/project/the_well_data}
 export WANDB_MODE=disabled
-L=/mnt/crucial/shansiming/project/WFAE/logs
+L=$(cd "$(dirname "$0")/../.." && pwd)/logs
 echo "=== [gpu0] JEPA authentic pretrain (40ep) $(date) ==="
 CUDA_VISIBLE_DEVICES=0 torchrun --nproc_per_node=1 --standalone \
     -m physics_jepa.train_jepa configs/train_trl2d_auth.yaml > $L/night_jepa_auth_train.log 2>&1

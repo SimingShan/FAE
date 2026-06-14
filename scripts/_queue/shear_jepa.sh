@@ -1,10 +1,10 @@
 #!/bin/bash
 set -uo pipefail
 cd "$(dirname "$0")/../../external/physical-representation-learning"
-export THE_WELL_DATA_DIR=/mnt/crucial/shansiming/project/the_well_data
+export THE_WELL_DATA_DIR=${THE_WELL_DATA_DIR:-/mnt/crucial/shansiming/project/the_well_data}
 export WANDB_MODE=disabled
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-L=/mnt/crucial/shansiming/project/WFAE/logs
+L=$(cd "$(dirname "$0")/../.." && pwd)/logs
 echo "=== [gpu0] JEPA shear pretrain $(date) ==="
 CUDA_VISIBLE_DEVICES=0 torchrun --nproc_per_node=1 --standalone \
     -m physics_jepa.train_jepa configs/train_shear_auth.yaml > $L/shear_jepa_train.log 2>&1
