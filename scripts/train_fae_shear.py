@@ -6,7 +6,7 @@ ridge probe here genuinely measures representation quality, and collapse can't
 fake a win (a collapsed latent scores ~0, like random).
 
 Pretrain (two coordinate-set views + VICReg) -> frozen ridge probe of logRe and
-logSc. Reports PR (collapse check) and both probe R^2.
+Sc. Reports PR (collapse check) and both probe R^2.
 """
 from __future__ import annotations
 import sys, os, time, argparse
@@ -57,6 +57,23 @@ def participation_ratio(Z):
     return float(e.sum() ** 2 / max((e ** 2).sum(), 1e-30))
 
 
+def sample_block_indices(side, frac, n_frames, device):
+    """Random square block of area ~frac on a side x side grid (tiled over
+    n_frames). Returns (visible_idx, block_idx) into the flat NPIX index space:
+    sensors are drawn from `visible` (outside the block), queries from `block`
+    (inside) — structured masking that defeats trivial local interpolation."""
+    b = max(1, int(round(side * frac ** 0.5)))
+    i0 = int(np.random.randint(0, side - b + 1))
+    j0 = int(np.random.randint(0, side - b + 1))
+    m = torch.zeros(side, side, dtype=torch.bool, device=device)
+    m[i0:i0 + b, j0:j0 + b] = True
+    m = m.flatten()
+    if n_frames > 1:
+        m = m.repeat(n_frames)
+    alli = torch.arange(m.numel(), device=device)
+    return alli[~m], alli[m]
+
+
 @torch.no_grad()
 def embed(model, ds, coords, idx, batch=64):
     model.eval()
@@ -69,7 +86,7 @@ def embed(model, ds, coords, idx, batch=64):
 
 def probe2(Ztr, Ytr, Zva, Yva):
     out = {}
-    for j, name in enumerate(["logRe", "logSc"]):
+    for j, name in enumerate(["logRe", "Sc"]):
         ytr, yva = Ytr[:, j], Yva[:, j]
         ym, ys = ytr.mean(), ytr.std() + 1e-8
         out[name] = lin_probe(Ztr, (ytr - ym) / ys, Zva, (yva - ym) / ys)
@@ -89,27 +106,46 @@ def main():
     ap.add_argument("--n_freq", type=int, default=32)
     ap.add_argument("--proj_dim", type=int, default=4096)
     ap.add_argument("--mcnt", type=int, nargs="+", default=[256, 512])
+    ap.add_argument("--sample_mode", choices=["frac", "count"], default="count",
+                    help="count (default): sparse --mcnt 256/512 — density sweep showed "
+                         "no benefit to raising it. frac: per-view ~ U(frac_lo,frac_hi)*NPIX (opt-in)")
+    ap.add_argument("--sensor_frac_lo", type=float, default=0.05)
+    ap.add_argument("--sensor_frac_hi", type=float, default=0.25)
+    ap.add_argument("--query_frac", type=float, default=None,
+                    help="denser recon target: n_query = query_frac*NPIX (overrides --n_query)")
+    ap.add_argument("--block_mask", action="store_true",
+                    help="structured masking: sensors from outside a held-out block, queries inside")
+    ap.add_argument("--block_frac", type=float, default=0.25, help="held-out block area fraction")
     ap.add_argument("--n_seed", type=int, default=24)
     ap.add_argument("--temporal", action="store_true", help="coord_dim=3 (x,y,t) windows")
-    ap.add_argument("--n_frames", type=int, default=4)
+    ap.add_argument("--n_frames", type=int, default=16, help="temporal context (paper: 16)")
+    ap.add_argument("--resolution", type=int, default=224, help="square resize side (paper: 224)")
     ap.add_argument("--tag", default="shear")
     args = ap.parse_args()
     cd = 3 if args.temporal else 2
 
-    print(f"=== FAE+VICReg shear_flow [{args.tag}]  coord_dim={cd} batch={args.batch} "
+    R = args.resolution
+    print(f"=== FAE+VICReg shear_flow [{args.tag}]  coord_dim={cd} res={R} batch={args.batch} "
           f"sim/std/cov={args.sim}/{args.std}/{args.cov} n_freq={args.n_freq} ===", flush=True)
     if args.temporal:
         from src.data.well2d import ShearFlowWindowDataset, make_coords_3d
-        tr = ShearFlowWindowDataset("train", n_seed=args.n_seed, n_frames=args.n_frames, side=128)
-        va = ShearFlowWindowDataset("valid", n_seed=8, n_frames=args.n_frames, side=128, stats=tr.stats)
-        coords = make_coords_3d(args.n_frames, n_side=128, device=DEVICE)
-        NPIX = args.n_frames * 128 * 128
+        tr = ShearFlowWindowDataset("train", n_seed=args.n_seed, n_frames=args.n_frames, side=R)
+        va = ShearFlowWindowDataset("valid", n_seed=8, n_frames=args.n_frames, side=R, stats=tr.stats)
+        coords = make_coords_3d(args.n_frames, n_side=R, device=DEVICE)
+        NPIX = args.n_frames * R * R
     else:
-        tr = ShearFlowSnapshotDataset("train", n_seed=args.n_seed, frame_stride=12, side=128)
-        va = ShearFlowSnapshotDataset("valid", n_seed=8, frame_stride=12, side=128, stats=tr.stats)
-        coords = make_coords_2d(device=DEVICE)
-        NPIX = 128 * 128
+        tr = ShearFlowSnapshotDataset("train", n_seed=args.n_seed, frame_stride=12, side=R)
+        va = ShearFlowSnapshotDataset("valid", n_seed=8, frame_stride=12, side=R, stats=tr.stats)
+        coords = make_coords_2d(n_side=R, device=DEVICE)
+        NPIX = R * R
     print(f"  train {len(tr)}  valid {len(va)}  | grid pts {NPIX}", flush=True)
+    n_query = int(args.query_frac * NPIX) if args.query_frac else args.n_query
+    nf_blk = args.n_frames if args.temporal else 1
+    smode = (f"frac U({args.sensor_frac_lo:.2f},{args.sensor_frac_hi:.2f})"
+             if args.sample_mode == "frac" else f"count {args.mcnt}")
+    print(f"  sensors={smode}  n_query={n_query} ({n_query/NPIX:.1%})  "
+          f"block_mask={args.block_mask}"
+          + (f" frac={args.block_frac}" if args.block_mask else ""), flush=True)
     loader = DataLoader(tr, batch_size=args.batch, shuffle=True, drop_last=True,
                          num_workers=4, pin_memory=True)
 
@@ -129,10 +165,20 @@ def main():
         agg = {"rec": 0, "sim": 0, "std": 0, "cov": 0, "n": 0}
         for fields, _y in loader:
             fields = fields.to(DEVICE, non_blocking=True); B = fields.size(0)
-            nA, nB = int(np.random.choice(args.mcnt)), int(np.random.choice(args.mcnt))
-            iA = torch.randperm(NPIX, device=DEVICE)[:nA]
-            iB = torch.randperm(NPIX, device=DEVICE)[:nB]
-            iq = torch.randperm(NPIX, device=DEVICE)[:args.n_query]
+            if args.sample_mode == "frac":
+                fr = np.random.uniform(args.sensor_frac_lo, args.sensor_frac_hi, size=2)
+                nA, nB = max(8, int(fr[0] * NPIX)), max(8, int(fr[1] * NPIX))
+            else:
+                nA, nB = int(np.random.choice(args.mcnt)), int(np.random.choice(args.mcnt))
+            if args.block_mask:
+                vis, blk = sample_block_indices(R, args.block_frac, nf_blk, DEVICE)
+                iA = vis[torch.randperm(vis.numel(), device=DEVICE)[:min(nA, vis.numel())]]
+                iB = vis[torch.randperm(vis.numel(), device=DEVICE)[:min(nB, vis.numel())]]
+                iq = blk[torch.randperm(blk.numel(), device=DEVICE)[:min(n_query, blk.numel())]]
+            else:
+                iA = torch.randperm(NPIX, device=DEVICE)[:nA]
+                iB = torch.randperm(NPIX, device=DEVICE)[:nB]
+                iq = torch.randperm(NPIX, device=DEVICE)[:n_query]
             target = fields_to_tokens(fields, iq)
             pA, tA = model(fields_to_tokens(fields, iA), coords[iA], coords[iq])
             pB, tB = model(fields_to_tokens(fields, iB), coords[iB], coords[iq])
@@ -151,18 +197,19 @@ def main():
             pr = participation_ratio(Ztr); pb = probe2(Ztr, Ytr, Zva, Yva)
             print(f"ep {ep+1:3d}/{args.epochs}  rec={agg['rec']/agg['n']:.3e} "
                   f"std={agg['std']/agg['n']:.3e}  PR={pr:.1f}  "
-                  f"probe logRe={pb['logRe']:.3f} logSc={pb['logSc']:.3f}  "
+                  f"probe logRe={pb['logRe']:.3f} Sc={pb['Sc']:.3f}  "
                   f"({time.time()-t0:.0f}s)", flush=True)
 
     out = f"results/checkpoints/g1/fae_vicreg_shear_{args.tag}.pt"
     os.makedirs(os.path.dirname(out), exist_ok=True)
     torch.save({"model": model.state_dict(), "stats": tr.stats,
+                  "train_args": vars(args),
                   "config": dict(emb_dim=320, num_iter=4, depth_per_iter=4, num_latents=128,
                                    num_cross_heads=4, num_self_heads=8, n_freq=args.n_freq,
                                    max_freq=32, coord_dim=cd, in_chans=4)}, out)
     Ztr, Ytr = embed(model, tr, coords, probe_idx); Zva, Yva = embed(model, va, coords, probe_idx)
     pr = participation_ratio(Ztr); pb = probe2(Ztr, Ytr, Zva, Yva)
-    print(f"\n=== [{args.tag}] PR={pr:.2f}  probe logRe={pb['logRe']:.3f} logSc={pb['logSc']:.3f} "
+    print(f"\n=== [{args.tag}] PR={pr:.2f}  probe logRe={pb['logRe']:.3f} Sc={pb['Sc']:.3f} "
           f"(random baseline ~0.0 — discriminating) ===\n  saved {out}", flush=True)
 
 

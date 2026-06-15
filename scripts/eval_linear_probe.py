@@ -2,7 +2,7 @@
 with the TRIVIAL baseline as the floor. (Other evaluations are archived under
 arxiv/ — out of scope for the current AE/MAE/JEPA/FAE comparison.)
 
-For shear_flow (the discriminating benchmark): probe (logRe, logSc) from each
+For shear_flow (the discriminating benchmark): probe (logRe, Sc) from each
 method's frozen representation; report R^2 and MSE on standardized labels (same
 standard as the paper's Table 1 — trivial predictor -> MSE 1.0), plus the
 participation ratio (collapse guard). Always reports the random/channel-mean
@@ -24,8 +24,7 @@ from src.data.well2d import ShearFlowSnapshotDataset, make_coords_2d, fields_to_
 from src.metrics import lin_probe, r2_score
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-NPIX = 128 * 128
-PARAMS = ["logRe", "logSc"]
+PARAMS = ["logRe", "Sc"]   # Reynolds log-compressed, Schmidt raw (Qu et al.)
 
 
 def participation_ratio(Z):
@@ -49,13 +48,14 @@ def probe_report(name, Ztr, Ytr, Zva, Yva, with_pr=True):
 
 # ----- per-method frozen embedding -----
 @torch.no_grad()
-def embed_fae(ckpt, ds, n_sensors=1024):
+def embed_fae(ckpt, ds, resolution=224, n_sensors=1024):
     from src.models import FAE
     ck = torch.load(ckpt, map_location=DEVICE, weights_only=False)
+    res = int(ck.get("train_args", {}).get("resolution", resolution))
     m = FAE(**ck["config"]).to(DEVICE).eval(); m.load_state_dict(ck["model"])
-    coords = make_coords_2d(device=DEVICE)
+    coords = make_coords_2d(n_side=res, device=DEVICE)
     g = torch.Generator(device=DEVICE).manual_seed(0)
-    idx = torch.randperm(NPIX, generator=g, device=DEVICE)[:n_sensors]
+    idx = torch.randperm(res * res, generator=g, device=DEVICE)[:n_sensors]
     Z, Y = [], []
     for f, y in DataLoader(ds, batch_size=64):
         tok = m.encoder(fields_to_tokens(f.to(DEVICE), idx), coords[idx])
@@ -77,13 +77,20 @@ def main():
     ap.add_argument("--method", choices=["fae", "mae", "ae", "ijepa", "trivial"], required=True)
     ap.add_argument("--ckpt", default=None)
     ap.add_argument("--n_seed", type=int, default=24)
+    ap.add_argument("--resolution", type=int, default=224,
+                    help="square resize side (paper: 224); auto-matched to ckpt if present")
     args = ap.parse_args()
 
-    tr = ShearFlowSnapshotDataset("train", n_seed=args.n_seed, side=128)
-    va = ShearFlowSnapshotDataset("valid", n_seed=8, side=128, stats=tr.stats)
-    Ytr = np.stack([tr.logRe, tr.logSc], 1); Yva = np.stack([va.logRe, va.logSc], 1)
+    res = args.resolution
+    if args.method != "trivial" and args.ckpt:
+        _ck = torch.load(args.ckpt, map_location="cpu", weights_only=False)
+        res = int(_ck.get("train_args", {}).get("resolution", res))
+
+    tr = ShearFlowSnapshotDataset("train", n_seed=args.n_seed, side=res)
+    va = ShearFlowSnapshotDataset("valid", n_seed=8, side=res, stats=tr.stats)
+    Ytr = np.stack([tr.logRe, tr.Sc], 1); Yva = np.stack([va.logRe, va.Sc], 1)
     Ftr = tr.fields.reshape(len(tr), -1); Fva = va.fields.reshape(len(va), -1)
-    print(f"=== shear_flow linear probe  train {len(tr)} / valid {len(va)} ===")
+    print(f"=== shear_flow linear probe  train {len(tr)} / valid {len(va)}  res={res} ===")
 
     # --- TRIVIAL baselines (the floor — a method must beat these) ---
     print("--- trivial baselines (floor) ---")
@@ -100,15 +107,15 @@ def main():
     assert args.ckpt, "--ckpt required"
     print(f"--- {args.method} (frozen) ---")
     if args.method == "fae":
-        Ztr, Ytr2 = embed_fae(args.ckpt, tr); Zva, Yva2 = embed_fae(args.ckpt, va)
+        Ztr, Ytr2 = embed_fae(args.ckpt, tr, res); Zva, Yva2 = embed_fae(args.ckpt, va, res)
     else:
         ck = torch.load(args.ckpt, map_location=DEVICE, weights_only=False)
         if args.method in ("mae", "ae"):
             from benchmarks.mae.mae import mae_physics
-            model = mae_physics().to(DEVICE).eval()
+            model = mae_physics(img_size=res).to(DEVICE).eval()
         else:
             from benchmarks.jepa.ijepa2d import ijepa2d_physics
-            model = ijepa2d_physics().to(DEVICE).eval()
+            model = ijepa2d_physics(img_size=res).to(DEVICE).eval()
         model.load_state_dict(ck["model"] if "model" in ck else ck)
         Ztr, Ytr2 = embed_image_model(model, tr); Zva, Yva2 = embed_image_model(model, va)
     probe_report(args.method, Ztr, Ytr2, Zva, Yva2)

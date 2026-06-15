@@ -10,7 +10,7 @@ results/                 # all metrics JSON, embeddings, figures
 *.hdf5
 *.npz
 logs/
-data/
+/data/                   # repo-root dataset dir only (NOT src/data/ loader code)
 dataset_cache/
 checkpoints/
 # environments / caches
