@@ -109,3 +109,14 @@ MSE ~0.69 (logRe R² 0.21 / logSc R² 0.41) — ≈ VideoMAE, below the paper's 
 (MSE 0.38), and NOT same-standard (pruned data, linear vs MLP probe, single
 frame). The cluster job: the full matrix on FULL shear_flow, param-matched
 (~ViT-Tiny 5.5M), with PR + trivial guards — that is the first real comparison.
+
+## Running on a NEW cluster (portable — all slurm scripts source scripts/env.sh)
+1. `git clone https://github.com/SimingShan/FAE.git WFAE && cd WFAE`
+2. Set paths once — edit `scripts/env.sh` OR export in ~/.bashrc:
+   `THE_WELL_DATA_DIR` (data root), `WFAE_ENV` (conda prefix or venv), `WFAE_REPO` (this repo).
+   Adapt the `module load` line in env.sh to your cluster (`module avail`).
+3. Env: `docs/cluster_setup.sh` (conda or venv) — pip: torch the_well timm einops h5py scikit-learn matplotlib huggingface_hub.
+4. Data (~440GB, HF, resumable): `sbatch scripts/download_shear_flow.slurm` (export HF_TOKEN first for speed).
+   Python reads via THE_WELL_DATA_DIR; no hardcoded paths.
+5. Smoke: `python benchmarks/smoke_test.py`
+6. Run best recipe: `sbatch scripts/run_fae_predict.slurm twoview 0 run1 "--dt_max 2 --dt_fixed 2 --num_latents 128 --batch 128"`

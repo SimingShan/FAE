@@ -67,6 +67,18 @@ def fields_to_tokens(fields: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
     return sel.permute(0, 2, 1).contiguous()         # (B, N, C)
 
 
+def fields_to_tube_tokens(fields: torch.Tensor, spatial_idx: torch.Tensor) -> torch.Tensor:
+    """Gather values at SPATIAL indices for EVERY frame (tube sampling).
+
+    fields: (B, C, T, H, W)   spatial_idx: (N,) long into H*W
+    returns: (B, N, T, C)  — for FAE time_mode='aggregate' (per-frame encode).
+    """
+    B, C, T = fields.shape[:3]
+    flat = fields.reshape(B, C, T, -1)               # (B, C, T, H*W)
+    sel = flat.index_select(3, spatial_idx)          # (B, C, T, N)
+    return sel.permute(0, 3, 2, 1).contiguous()      # (B, N, T, C)
+
+
 # ----------------------------------------------------------------------
 # Shared file IO
 # ----------------------------------------------------------------------
@@ -157,16 +169,18 @@ class _ShearFlowBase(Dataset):
     """Holds normalized fields + log10 labels; subclasses fill ``self.fields``."""
 
     def _finalize(self, fields_list, re_list, sc_list, stats):
-        self.fields = np.concatenate(fields_list, axis=0)            # (N, C, ...)
+        self.fields = np.concatenate(fields_list, axis=0).astype(np.float32, copy=False)
+        fields_list.clear()                                         # free per-file arrays
         self.logRe = np.concatenate(re_list).astype(np.float32)
         self.Sc = np.concatenate(sc_list).astype(np.float32)   # raw Schmidt
         ax = (0,) + tuple(range(2, self.fields.ndim))               # all but channel
         if stats is None:
-            mean = self.fields.mean(axis=ax, keepdims=True)
-            std = self.fields.std(axis=ax, keepdims=True) + 1e-6
+            mean = self.fields.mean(axis=ax, keepdims=True).astype(np.float32)
+            std = (self.fields.std(axis=ax, keepdims=True) + 1e-6).astype(np.float32)
         else:
             mean, std = stats
-        self.fields = ((self.fields - mean) / std).astype(np.float32)
+        self.fields -= mean                                         # in-place: no 2x copy
+        self.fields /= std
         self.stats = (mean, std)
 
     def __len__(self):
@@ -205,6 +219,111 @@ class ShearFlowWindowDataset(_ShearFlowBase):
             re_list.append(np.full(w, np.log10(Re)))
             sc_list.append(np.full(w, np.log10(Sc)))
         self._finalize(f_list, re_list, sc_list, stats)
+
+
+class ShearFlowPairDataset(_ShearFlowBase):
+    """Temporal pairs (field_t, field_{t+h}) for latent-prediction SSL.
+
+    Frames are read at ``frame_stride``; ``horizon`` is in stride units, so the
+    physical gap is ``horizon * frame_stride`` timesteps. __getitem__ -> (A, B, y)
+    with A=field_t, B=field_{t+h}, both (4, side, side); y=[log10 Re, raw Sc].
+    """
+    def __init__(self, split, n_seed=24, frame_stride=12, horizon=1, side=224, stats=None):
+        super().__init__()
+        import h5py
+        a_list, b_list, re_list, sc_list = [], [], [], []
+        for path in _split_files(split):
+            with h5py.File(path, "r") as h:
+                Re = float(h.attrs["Reynolds"]); Sc = float(h.attrs["Schmidt"])
+                nt = min(n_seed, h["t0_fields/tracer"].shape[0])
+                sl = (slice(0, nt), slice(0, None, frame_stride))
+                tr = h["t0_fields/tracer"][sl]; pr = h["t0_fields/pressure"][sl]
+                ve = h["t1_fields/velocity"][sl]
+            fields = np.stack([tr, pr, ve[..., 0], ve[..., 1]], axis=2)   # (nt, nf, 4, H, W)
+            nt, nf = fields.shape[:2]
+            if nf <= horizon:
+                continue
+            fields = _resize(fields.reshape(-1, 4, *fields.shape[3:]).astype(np.float32), side)
+            fields = fields.reshape(nt, nf, 4, side, side)
+            A = fields[:, :nf - horizon].reshape(-1, 4, side, side)
+            B = fields[:, horizon:].reshape(-1, 4, side, side)
+            m = A.shape[0]
+            a_list.append(A); b_list.append(B)
+            re_list.append(np.full(m, np.log10(Re))); sc_list.append(np.full(m, Sc))
+        self.A = np.concatenate(a_list).astype(np.float32)
+        self.B = np.concatenate(b_list).astype(np.float32)
+        a_list.clear(); b_list.clear()
+        self.logRe = np.concatenate(re_list).astype(np.float32)
+        self.Sc = np.concatenate(sc_list).astype(np.float32)
+        ax = (0, 2, 3)
+        if stats is None:
+            mean = self.A.mean(axis=ax, keepdims=True).astype(np.float32)
+            std = (self.A.std(axis=ax, keepdims=True) + 1e-6).astype(np.float32)
+        else:
+            mean, std = stats
+        self.A -= mean; self.A /= std
+        self.B -= mean; self.B /= std
+        self.stats = (mean, std)
+        self.fields = self.A                                              # len/probe compat
+
+    def __len__(self):
+        return len(self.A)
+
+    def __getitem__(self, i):
+        y = torch.tensor([self.logRe[i], self.Sc[i]], dtype=torch.float32)
+        return torch.from_numpy(self.A[i]), torch.from_numpy(self.B[i]), y
+
+
+class ShearFlowClipDataset(_ShearFlowBase):
+    """Short strided clips for VARIABLE-Δt latent prediction.
+
+    Yields ``(clip, y)`` with clip ``(4, clip_len, side, side)`` of frames spaced
+    ``frame_stride`` apart; the trainer samples a pair ``(t0, t0+Δ)`` and a gap Δ
+    INSIDE the loop, so one dataset serves the whole horizon distribution.
+    """
+    def __init__(self, split, n_seed=24, frame_stride=4, clip_len=8, side=224, stats=None):
+        super().__init__()
+        import h5py
+        c_list, re_list, sc_list = [], [], []
+        for path in _split_files(split):
+            with h5py.File(path, "r") as h:
+                Re = float(h.attrs["Reynolds"]); Sc = float(h.attrs["Schmidt"])
+                nt = min(n_seed, h["t0_fields/tracer"].shape[0])
+                sl = (slice(0, nt), slice(0, None, frame_stride))
+                tr = h["t0_fields/tracer"][sl]; pr = h["t0_fields/pressure"][sl]
+                ve = h["t1_fields/velocity"][sl]
+            fields = np.stack([tr, pr, ve[..., 0], ve[..., 1]], axis=2)     # (nt, nf, 4, H, W)
+            nt, nf = fields.shape[:2]
+            ncl = nf // clip_len
+            if ncl == 0:
+                continue
+            fields = fields[:, :ncl * clip_len]
+            H, W = fields.shape[-2:]
+            fields = _resize(fields.reshape(-1, 4, H, W).astype(np.float32), side)
+            fields = fields.reshape(nt * ncl, clip_len, 4, side, side)
+            clips = fields.transpose(0, 2, 1, 3, 4)                          # (N, 4, clip_len, side, side)
+            c_list.append(clips); m = clips.shape[0]
+            re_list.append(np.full(m, np.log10(Re))); sc_list.append(np.full(m, Sc))
+        self.clips = np.concatenate(c_list).astype(np.float32)
+        c_list.clear()
+        self.logRe = np.concatenate(re_list).astype(np.float32)
+        self.Sc = np.concatenate(sc_list).astype(np.float32)
+        ax = (0, 2, 3, 4)                                                    # all but channel
+        if stats is None:
+            mean = self.clips.mean(axis=ax, keepdims=True).astype(np.float32)
+            std = (self.clips.std(axis=ax, keepdims=True) + 1e-6).astype(np.float32)
+        else:
+            mean, std = stats
+        self.clips -= mean; self.clips /= std
+        self.stats = (mean, std)
+        self.fields = self.clips                                            # len/probe compat
+
+    def __len__(self):
+        return len(self.clips)
+
+    def __getitem__(self, i):
+        y = torch.tensor([self.logRe[i], self.Sc[i]], dtype=torch.float32)
+        return torch.from_numpy(self.clips[i]), y
 
 
 if __name__ == "__main__":

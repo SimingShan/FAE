@@ -350,6 +350,31 @@ class QueryReadout(nn.Module):
 
 
 # ----------------------------------------------------------------------
+# Temporal aggregation (CViT-style time handling)
+# ----------------------------------------------------------------------
+class TemporalAggregator(nn.Module):
+    """CViT-style time handling: per-frame latents (B, T, M, dim) -> temporal
+    self-attention over the T frames -> learned-query cross-attention pool ->
+    (B, M, dim). Contrast with the default 'coord' mode, where time is just a
+    third input coordinate (x, y, t) handled jointly by the encoder."""
+    def __init__(self, dim, num_heads=8, depth=1, dropout=0.0):
+        super().__init__()
+        self.frames = nn.ModuleList([SelfLayer(dim, num_heads, dropout) for _ in range(depth)])
+        self.query = nn.Parameter(torch.empty(1, 1, dim))
+        with torch.no_grad():
+            self.query.normal_(0.0, 0.02)
+        self.pool = CrossLayer(dim, dim, num_heads, dropout)
+
+    def forward(self, z):                                   # z: (B, T, M, dim)
+        B, T, M, D = z.shape
+        z = z.permute(0, 2, 1, 3).reshape(B * M, T, D)      # (B*M, T, dim)
+        for layer in self.frames:
+            z = layer(z)
+        q = self.query.expand(B * M, -1, -1)
+        return self.pool(q, z).reshape(B, M, D)             # (B, M, dim)
+
+
+# ----------------------------------------------------------------------
 # Full autoencoder
 # ----------------------------------------------------------------------
 class FAE(nn.Module):
@@ -372,13 +397,18 @@ class FAE(nn.Module):
                   dec_n_freq=32, dec_max_freq=32, dec_num_heads=4,
                   num_latents=128, dropout=0.0, coord_dim=2,
                   decoder_kind="senseiver", decoder_num_blocks=2,
-                  decoder_mlp_mult=2, readout_queries=0, in_chans=1):
+                  decoder_mlp_mult=2, readout_queries=0, in_chans=1,
+                  time_mode="coord", n_frames=1):
         super().__init__()
+        # time_mode "coord": encoder sees full coord_dim (e.g. (x,y,t)).
+        # time_mode "aggregate": encoder is spatial (coord_dim=2) per frame, a
+        #   TemporalAggregator pools over frames; decoder still queries (x,y,t).
         self.encoder = FAEEncoder(
             emb_dim=emb_dim, num_iter=num_iter, depth_per_iter=depth_per_iter,
             num_cross_heads=num_cross_heads, num_self_heads=num_self_heads,
             n_freq=n_freq, max_freq=max_freq, val_dim=val_dim,
-            num_latents=num_latents, dropout=dropout, coord_dim=coord_dim,
+            num_latents=num_latents, dropout=dropout,
+            coord_dim=(2 if time_mode == "aggregate" else coord_dim),
             in_chans=in_chans)
         if decoder_kind == "senseiver":
             self.decoder = SenseiverDecoder(
@@ -399,6 +429,10 @@ class FAE(nn.Module):
         self.emb_dim = emb_dim
         self.num_latents = num_latents
         self.coord_dim = coord_dim
+        self.time_mode = time_mode
+        self.n_frames = n_frames
+        self.temporal_agg = (TemporalAggregator(emb_dim, num_heads=num_self_heads, dropout=dropout)
+                             if time_mode == "aggregate" else None)
         # Optional learned readout (0 = mean-pool, the default representation).
         self.readout = (QueryReadout(emb_dim, readout_queries)
                           if readout_queries > 0 else None)
@@ -411,8 +445,21 @@ class FAE(nn.Module):
             return self.readout(tokens).flatten(1)      # (B, K*emb_dim)
         return tokens.mean(dim=1)                        # (B, emb_dim)
 
+    def encode_tokens(self, u, in_coords):
+        """Sensor values -> latent tokens (B, M, emb_dim), honoring time_mode.
+          coord:     u (B, N, C),    in_coords (N, coord_dim) -> joint encode.
+          aggregate: u (B, N, T, C), in_coords (N, 2)         -> per-frame encode
+                     then TemporalAggregator over the T frames."""
+        if self.time_mode == "aggregate":
+            B, N, T, C = u.shape
+            u_f = u.permute(0, 2, 1, 3).reshape(B * T, N, C)
+            tok = self.encoder(u_f, in_coords)               # (B*T, M, emb_dim)
+            tok = tok.reshape(B, T, tok.size(1), tok.size(2))
+            return self.temporal_agg(tok)                     # (B, M, emb_dim)
+        return self.encoder(u, in_coords)
+
     def forward(self, u, in_coords, query_coords):
-        tokens = self.encoder(u, in_coords)
+        tokens = self.encode_tokens(u, in_coords)
         pred = self.decoder(tokens, query_coords)
         return pred, tokens
 

@@ -31,9 +31,11 @@ PARAMS = ["logRe", "Sc"]
 
 # Method-appropriate optimizer defaults (matched batch/epochs, NOT matched lr).
 CFG = {
-    "ae":    dict(lr=1.5e-4, wd=0.05, betas=(0.9, 0.95)),   # Kaiming MAE recipe
-    "mae":   dict(lr=1.5e-4, wd=0.05, betas=(0.9, 0.95)),
-    "ijepa": dict(lr=1.0e-3, wd=0.04, betas=(0.9, 0.999)),  # I-JEPA recipe
+    "ae":       dict(lr=1.5e-4, wd=0.05, betas=(0.9, 0.95)),   # Kaiming MAE recipe
+    "mae":      dict(lr=1.5e-4, wd=0.05, betas=(0.9, 0.95)),
+    "videomae": dict(lr=1.5e-4, wd=0.05, betas=(0.9, 0.95)),   # temporal pixel baseline
+    "ijepa":    dict(lr=1.0e-3, wd=0.04, betas=(0.9, 0.999)),  # I-JEPA recipe
+    "stjepa":   dict(lr=1.0e-3, wd=0.04, betas=(0.9, 0.999)),  # spatio-temporal JEPA (tubelet)
 }
 
 
@@ -63,29 +65,41 @@ def probe2(Ztr, Ytr, Zva, Yva):
     return out
 
 
-def build_model(method, resolution=224):
+def build_model(method, resolution=224, n_frames=1, tubelet=2):
     if method in ("ae", "mae"):
         from benchmarks.mae.mae import mae_physics
         return mae_physics(img_size=resolution).to(DEVICE)
+    if method == "videomae":
+        from benchmarks.mae.videomae import videomae_physics
+        return videomae_physics(img_size=resolution, num_frames=n_frames).to(DEVICE)
+    if method == "stjepa":
+        from benchmarks.jepa.stjepa import stjepa_physics
+        return stjepa_physics(img_size=resolution, num_frames=n_frames, tubelet=tubelet).to(DEVICE)
     from benchmarks.jepa.ijepa2d import ijepa2d_physics
     return ijepa2d_physics(img_size=resolution).to(DEVICE)
 
 
 def loss_step(method, model, x, args):
-    """One forward -> scalar loss (no backward). I-JEPA EMA handled by caller."""
+    """One forward -> scalar loss (no backward). JEPA EMA handled by caller."""
     if method == "ae":
         return model(x, mask_ratio=0.0)[0]
-    if method == "mae":
+    if method in ("mae", "videomae"):
         return model(x, mask_ratio=args.mask_ratio)[0]
-    from benchmarks.jepa.ijepa2d import sample_masks
-    ctx, tgt = sample_masks(x.size(0), model.num_patches, args.n_ctx, args.n_tgt, DEVICE)
+    from benchmarks.jepa.ijepa2d import sample_masks                     # ijepa / stjepa
+    P = model.num_patches                                               # scale masks to patch count
+    n_ctx = max(8, int(args.ctx_frac * P)); n_tgt = max(4, int(args.tgt_frac * P))
+    ctx, tgt = sample_masks(x.size(0), P, n_ctx, n_tgt, DEVICE)
     pred, h = model(x, ctx, tgt)
     return F.smooth_l1_loss(pred, h)
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--method", choices=["ae", "mae", "ijepa"], required=True)
+    ap.add_argument("--method", choices=["ae", "mae", "ijepa", "videomae", "stjepa"], required=True)
+    ap.add_argument("--n_frames", type=int, default=1, help="clip length for videomae/stjepa")
+    ap.add_argument("--tubelet", type=int, default=2, help="temporal tubelet size (videomae/stjepa)")
+    ap.add_argument("--ctx_frac", type=float, default=0.2, help="JEPA context patches as frac of P")
+    ap.add_argument("--tgt_frac", type=float, default=0.06, help="JEPA target patches as frac of P")
     ap.add_argument("--epochs", type=int, default=100)
     ap.add_argument("--batch", type=int, default=256)
     ap.add_argument("--lr", type=float, default=None, help="override method default")
@@ -100,8 +114,10 @@ def main():
     ap.add_argument("--eval_every", type=int, default=10)
     ap.add_argument("--resolution", type=int, default=224, help="square resize side (paper: 224)")
     ap.add_argument("--workers", type=int, default=8)
+    ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--tag", default="v1")
     args = ap.parse_args()
+    torch.manual_seed(args.seed); np.random.seed(args.seed)
 
     cfg = CFG[args.method]
     lr = args.lr if args.lr is not None else cfg["lr"]
@@ -109,15 +125,20 @@ def main():
     print(f"=== {args.method.upper()} shear_flow [{args.tag}]  res={args.resolution} batch={args.batch} "
           f"epochs={args.epochs} lr={lr:.1e} wd={wd} amp={args.amp} ===", flush=True)
 
-    tr = ShearFlowSnapshotDataset("train", n_seed=args.n_seed, frame_stride=12, side=args.resolution)
-    va = ShearFlowSnapshotDataset("valid", n_seed=8, frame_stride=12, side=args.resolution, stats=tr.stats)
+    if args.method in ("videomae", "stjepa"):
+        from src.data.well2d import ShearFlowWindowDataset
+        tr = ShearFlowWindowDataset("train", n_seed=args.n_seed, n_frames=args.n_frames, side=args.resolution)
+        va = ShearFlowWindowDataset("valid", n_seed=8, n_frames=args.n_frames, side=args.resolution, stats=tr.stats)
+    else:
+        tr = ShearFlowSnapshotDataset("train", n_seed=args.n_seed, frame_stride=12, side=args.resolution)
+        va = ShearFlowSnapshotDataset("valid", n_seed=8, frame_stride=12, side=args.resolution, stats=tr.stats)
     Ytr_all = np.stack([tr.logRe, tr.Sc], 1)
     Yva_all = np.stack([va.logRe, va.Sc], 1)
     print(f"  train {len(tr)}  valid {len(va)}", flush=True)
     loader = DataLoader(tr, batch_size=args.batch, shuffle=True, drop_last=True,
                         num_workers=args.workers, pin_memory=True)
 
-    model = build_model(args.method, args.resolution)
+    model = build_model(args.method, args.resolution, args.n_frames, args.tubelet)
     npar = sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e6
     print(f"  params(trainable)={npar:.2f}M", flush=True)
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=wd, betas=cfg["betas"])
@@ -145,7 +166,7 @@ def main():
             scaler.unscale_(opt)
             nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             scaler.step(opt); scaler.update()
-            if args.method == "ijepa":
+            if args.method in ("ijepa", "stjepa"):
                 tau = args.ema_start + (args.ema_end - args.ema_start) * (gstep / max(1, total_steps - 1))
                 model.update_target(tau)
             run += float(loss) * x.size(0); n += x.size(0); gstep += 1

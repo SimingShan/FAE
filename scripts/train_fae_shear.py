@@ -18,7 +18,8 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from src.models import FAE
-from src.data.well2d import ShearFlowSnapshotDataset, make_coords_2d, fields_to_tokens
+from src.data.well2d import (ShearFlowSnapshotDataset, make_coords_2d,
+                             fields_to_tokens, fields_to_tube_tokens)
 from src.metrics import lin_probe
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -75,11 +76,11 @@ def sample_block_indices(side, frac, n_frames, device):
 
 
 @torch.no_grad()
-def embed(model, ds, coords, idx, batch=64):
+def embed(model, ds, coords_in, idx, tok_fn, batch=64):
     model.eval()
-    c_in = coords[idx]; Z, Y = [], []
+    c_in = coords_in[idx]; Z, Y = [], []
     for fields, y in DataLoader(ds, batch_size=batch):
-        tok = model.encoder(fields_to_tokens(fields.to(DEVICE), idx), c_in)
+        tok = model.encode_tokens(tok_fn(fields.to(DEVICE), idx), c_in)
         Z.append(model.represent(tok).cpu().numpy()); Y.append(y.numpy())
     return np.concatenate(Z), np.concatenate(Y)
 
@@ -120,8 +121,13 @@ def main():
     ap.add_argument("--temporal", action="store_true", help="coord_dim=3 (x,y,t) windows")
     ap.add_argument("--n_frames", type=int, default=16, help="temporal context (paper: 16)")
     ap.add_argument("--resolution", type=int, default=224, help="square resize side (paper: 224)")
+    ap.add_argument("--time_mode", choices=["coord", "aggregate"], default="coord",
+                    help="coord: time as (x,y,t) coordinate (default). aggregate: per-frame "
+                         "spatial encode + temporal pooling, CViT-style. Temporal runs only.")
+    ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--tag", default="shear")
     args = ap.parse_args()
+    torch.manual_seed(args.seed); np.random.seed(args.seed)
     cd = 3 if args.temporal else 2
 
     R = args.resolution
@@ -139,6 +145,15 @@ def main():
         coords = make_coords_2d(n_side=R, device=DEVICE)
         NPIX = R * R
     print(f"  train {len(tr)}  valid {len(va)}  | grid pts {NPIX}", flush=True)
+    # time_mode plumbing: 'aggregate' draws SPATIAL sensors (tube over frames) but
+    # still queries the full spacetime field; 'coord' uses the joint (x,y,t) grid.
+    AGG = args.temporal and args.time_mode == "aggregate"
+    if AGG:
+        coords_in = make_coords_2d(n_side=R, device=DEVICE)      # (R*R, 2) spatial sensors
+        NPIX_in, tok_in = R * R, fields_to_tube_tokens
+    else:
+        coords_in, NPIX_in, tok_in = coords, NPIX, fields_to_tokens
+    print(f"  time_mode={args.time_mode}  sensor-space={NPIX_in}  query-space={NPIX}", flush=True)
     n_query = int(args.query_frac * NPIX) if args.query_frac else args.n_query
     nf_blk = args.n_frames if args.temporal else 1
     smode = (f"frac U({args.sensor_frac_lo:.2f},{args.sensor_frac_hi:.2f})"
@@ -151,14 +166,15 @@ def main():
 
     model = FAE(emb_dim=320, num_iter=4, depth_per_iter=4, num_latents=128,
                   num_cross_heads=4, num_self_heads=8, n_freq=args.n_freq, max_freq=32,
-                  coord_dim=cd, in_chans=4).to(DEVICE)
+                  coord_dim=cd, in_chans=4,
+                  time_mode=args.time_mode, n_frames=args.n_frames).to(DEVICE)
     proj = make_projector(320, args.proj_dim).to(DEVICE)
     params = list(model.parameters()) + list(proj.parameters())
     opt = torch.optim.AdamW(params, lr=args.lr, weight_decay=1e-4)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.epochs)
 
     g0 = torch.Generator(device=DEVICE).manual_seed(0)
-    probe_idx = torch.randperm(NPIX, generator=g0, device=DEVICE)[:1024]
+    probe_idx = torch.randperm(NPIX_in, generator=g0, device=DEVICE)[:1024]
     t0 = time.time()
     for ep in range(args.epochs):
         model.train(); proj.train()
@@ -167,21 +183,21 @@ def main():
             fields = fields.to(DEVICE, non_blocking=True); B = fields.size(0)
             if args.sample_mode == "frac":
                 fr = np.random.uniform(args.sensor_frac_lo, args.sensor_frac_hi, size=2)
-                nA, nB = max(8, int(fr[0] * NPIX)), max(8, int(fr[1] * NPIX))
+                nA, nB = max(8, int(fr[0] * NPIX_in)), max(8, int(fr[1] * NPIX_in))
             else:
                 nA, nB = int(np.random.choice(args.mcnt)), int(np.random.choice(args.mcnt))
-            if args.block_mask:
+            if args.block_mask and not AGG:
                 vis, blk = sample_block_indices(R, args.block_frac, nf_blk, DEVICE)
                 iA = vis[torch.randperm(vis.numel(), device=DEVICE)[:min(nA, vis.numel())]]
                 iB = vis[torch.randperm(vis.numel(), device=DEVICE)[:min(nB, vis.numel())]]
                 iq = blk[torch.randperm(blk.numel(), device=DEVICE)[:min(n_query, blk.numel())]]
             else:
-                iA = torch.randperm(NPIX, device=DEVICE)[:nA]
-                iB = torch.randperm(NPIX, device=DEVICE)[:nB]
+                iA = torch.randperm(NPIX_in, device=DEVICE)[:nA]
+                iB = torch.randperm(NPIX_in, device=DEVICE)[:nB]
                 iq = torch.randperm(NPIX, device=DEVICE)[:n_query]
             target = fields_to_tokens(fields, iq)
-            pA, tA = model(fields_to_tokens(fields, iA), coords[iA], coords[iq])
-            pB, tB = model(fields_to_tokens(fields, iB), coords[iB], coords[iq])
+            pA, tA = model(tok_in(fields, iA), coords_in[iA], coords[iq])
+            pB, tB = model(tok_in(fields, iB), coords_in[iB], coords[iq])
             l_rec = 0.5 * (F.mse_loss(pA, target) + F.mse_loss(pB, target))
             l_sim, l_std, l_cov = vicreg(proj, model.represent(tA), model.represent(tB), B)
             loss = args.lam_rec * l_rec + args.sim * l_sim + args.std * l_std + args.cov * l_cov
@@ -192,8 +208,8 @@ def main():
             agg["n"] += B
         sched.step()
         if (ep + 1) % 10 == 0 or ep == 0:
-            Ztr, Ytr = embed(model, tr, coords, probe_idx)
-            Zva, Yva = embed(model, va, coords, probe_idx)
+            Ztr, Ytr = embed(model, tr, coords_in, probe_idx, tok_in)
+            Zva, Yva = embed(model, va, coords_in, probe_idx, tok_in)
             pr = participation_ratio(Ztr); pb = probe2(Ztr, Ytr, Zva, Yva)
             print(f"ep {ep+1:3d}/{args.epochs}  rec={agg['rec']/agg['n']:.3e} "
                   f"std={agg['std']/agg['n']:.3e}  PR={pr:.1f}  "
@@ -207,7 +223,7 @@ def main():
                   "config": dict(emb_dim=320, num_iter=4, depth_per_iter=4, num_latents=128,
                                    num_cross_heads=4, num_self_heads=8, n_freq=args.n_freq,
                                    max_freq=32, coord_dim=cd, in_chans=4)}, out)
-    Ztr, Ytr = embed(model, tr, coords, probe_idx); Zva, Yva = embed(model, va, coords, probe_idx)
+    Ztr, Ytr = embed(model, tr, coords_in, probe_idx, tok_in); Zva, Yva = embed(model, va, coords_in, probe_idx, tok_in)
     pr = participation_ratio(Ztr); pb = probe2(Ztr, Ytr, Zva, Yva)
     print(f"\n=== [{args.tag}] PR={pr:.2f}  probe logRe={pb['logRe']:.3f} Sc={pb['Sc']:.3f} "
           f"(random baseline ~0.0 — discriminating) ===\n  saved {out}", flush=True)

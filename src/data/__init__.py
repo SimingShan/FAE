@@ -4,6 +4,7 @@ from .well2d import (
     make_coords_2d,
     make_coords_3d,
     fields_to_tokens,
+    fields_to_tube_tokens,
 )
 
 __all__ = [
@@ -12,4 +13,5 @@ __all__ = [
     "make_coords_2d",
     "make_coords_3d",
     "fields_to_tokens",
+    "fields_to_tube_tokens",
 ]
