@@ -60,9 +60,12 @@ def embed(model, ds, coords, idx, batch=128):
     return np.concatenate(Zms), np.concatenate(Zm), np.concatenate(Y)
 
 
+PARAMS = ["logRe", "Sc"]
+
+
 def probe2(Ztr, Ytr, Zva, Yva):
     out = {}
-    for j, nm in enumerate(["logRe", "Sc"]):
+    for j, nm in enumerate(PARAMS):
         yt, yv = Ytr[:, j], Yva[:, j]; m, s = yt.mean(), yt.std() + 1e-8
         out[nm] = lin_probe(Ztr, (yt - m) / s, Zva, (yv - m) / s)
     return out
@@ -103,6 +106,8 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--tag", default="faep")
     ap.add_argument("--save", action="store_true")
+    ap.add_argument("--dataset", choices=["shear", "flowbench"], default="shear")
+    ap.add_argument("--in_chans", type=int, default=None, help="default 4 (shear) / 3 (flowbench)")
     args = ap.parse_args()
     torch.manual_seed(args.seed); np.random.seed(args.seed)
     R = args.resolution; NPIX = R * R
@@ -114,18 +119,25 @@ def main():
     print(f"=== FAE-{args.mode} [{args.tag}] dt_max={args.dt_max} mcnt={args.mcnt} "
           f"n_query={args.n_query} res={R} ===", flush=True)
 
-    tr = ShearFlowClipDataset("train", n_seed=args.n_seed, frame_stride=args.frame_stride,
-                              clip_len=clip_len, side=R)
-    va = ShearFlowClipDataset("valid", n_seed=8, frame_stride=args.frame_stride,
-                              clip_len=clip_len, side=R, stats=tr.stats)
-    print(f"  train {len(tr)} valid {len(va)}", flush=True)
+    in_chans = args.in_chans if args.in_chans is not None else (3 if args.dataset == "flowbench" else 4)
+    if args.dataset == "flowbench":
+        from src.data.flowbench import FlowBenchFPO
+        PARAMS[:] = ["Strouhal"]
+        tr = FlowBenchFPO("train", side=R, mode="clip", clip_len=clip_len, frame_stride=args.frame_stride)
+        va = FlowBenchFPO("valid", side=R, mode="clip", clip_len=clip_len, frame_stride=args.frame_stride, stats=tr.stats)
+    else:
+        tr = ShearFlowClipDataset("train", n_seed=args.n_seed, frame_stride=args.frame_stride,
+                                  clip_len=clip_len, side=R)
+        va = ShearFlowClipDataset("valid", n_seed=8, frame_stride=args.frame_stride,
+                                  clip_len=clip_len, side=R, stats=tr.stats)
+    print(f"  dataset={args.dataset} in_chans={in_chans}  train {len(tr)} valid {len(va)}", flush=True)
     loader = DataLoader(tr, batch_size=args.batch, shuffle=True, drop_last=True,
                         num_workers=4, pin_memory=True)
     coords = make_coords_2d(n_side=R, device=DEVICE)
 
     model = FAE(emb_dim=args.emb_dim, num_iter=args.num_iter, depth_per_iter=4,
                 num_latents=args.num_latents, num_cross_heads=4, num_self_heads=8,
-                n_freq=32, max_freq=32, coord_dim=2, in_chans=4,
+                n_freq=32, max_freq=32, coord_dim=2, in_chans=in_chans,
                 decoder_kind=args.decoder_kind, decoder_num_blocks=args.dec_blocks).to(DEVICE)
     npar = sum(p.numel() for p in model.parameters()) / 1e6
     print(f"  num_latents={args.num_latents} num_iter={args.num_iter} dec={args.decoder_kind} "
@@ -190,9 +202,11 @@ def main():
             Zms, Zm, Ytr = embed(model, tr, coords, probe_idx)
             Vms, Vm, Yva = embed(model, va, coords, probe_idx)
             pr = participation_ratio(Zms); pb = probe2(Zms, Ytr, Vms, Yva); pm = probe2(Zm, Ytr, Vm, Yva)
+            psms = " ".join(f"{k}={pb[k]:+.3f}" for k in PARAMS)
+            psm = " ".join(f"{k}={pm[k]:+.3f}" for k in PARAMS)
+            vram = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
             print(f"ep {ep+1:3d}/{args.epochs}  rec={ag['rec']/ag['n']:.3e}  PR={pr:.1f}  "
-                  f"mean+std logRe={pb['logRe']:+.3f} Sc={pb['Sc']:+.3f} | "
-                  f"mean logRe={pm['logRe']:+.3f} Sc={pm['Sc']:+.3f}  ({time.time()-t0:.0f}s)", flush=True)
+                  f"mean+std {psms} | mean {psm}  peakVRAM={vram:.1f}GB  ({time.time()-t0:.0f}s)", flush=True)
     if args.save:
         out = f"results/checkpoints/g1/faep_{args.mode}_{args.tag}.pt"
         os.makedirs(os.path.dirname(out), exist_ok=True)
