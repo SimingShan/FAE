@@ -128,6 +128,7 @@ def main():
     ap.add_argument("--lam_grad", type=float, default=0.0, help="gradient-loss weight (spectral-bias fix)")
     ap.add_argument("--lam_fft", type=float, default=0.0, help="FFT/spectral-loss weight (spectral-bias fix)")
     ap.add_argument("--fft_flat", action="store_true", help="FFT loss WITHOUT high-freq weighting")
+    ap.add_argument("--drop_l2", action="store_true", help="present recon uses ONLY grad/fft (no L2 pixel term)")
     args = ap.parse_args()
     torch.manual_seed(args.seed); np.random.seed(args.seed)
     R = args.resolution; NPIX = R * R
@@ -196,19 +197,21 @@ def main():
             loss = torch.zeros((), device=DEVICE); l_rec = torch.zeros((), device=DEVICE)
             l_std = torch.tensor(0.0)
             if do_present:                                          # anchor latent to the input x_t
-                pred_t = model.decoder(tA, coords[iq])
-                if args.norm_target:                                # strip per-sample per-channel amplitude
-                    sc = fa.std(dim=(2, 3)).unsqueeze(1).clamp_min(0.5)   # (B,1,C); floor: down-weight loud samples, don't amplify flat channels
-                    lp = F.mse_loss(pred_t / sc, tgt_t / sc)
-                else:
-                    lp = F.mse_loss(pred_t, tgt_t)
-                loss = loss + lp; l_rec = l_rec + lp
+                if not args.drop_l2:                                # L2 pixel recon (skip for grad/fft-only)
+                    pred_t = model.decoder(tA, coords[iq])
+                    if args.norm_target:                            # strip per-sample per-channel amplitude
+                        sc = fa.std(dim=(2, 3)).unsqueeze(1).clamp_min(0.5)   # floor: down-weight loud, don't amplify flat
+                        lp = F.mse_loss(pred_t / sc, tgt_t / sc)
+                    else:
+                        lp = F.mse_loss(pred_t, tgt_t)
+                    loss = loss + lp; l_rec = l_rec + lp
                 if args.lam_grad > 0 or args.lam_fft > 0:          # dense decode -> spectral-bias losses
                     Bc, Cc = fa.size(0), fa.size(1)
                     xhat = model.decoder(tA, coords_d).reshape(Bc, DS, DS, Cc).permute(0, 3, 1, 2)
                     tgtd = F.interpolate(fa, size=(DS, DS), mode="bilinear", align_corners=False)
-                    if args.lam_grad > 0: loss = loss + args.lam_grad * grad_loss(xhat, tgtd)
-                    if args.lam_fft > 0: loss = loss + args.lam_fft * fft_loss(xhat, tgtd, hf=not args.fft_flat)
+                    sl = args.lam_grad * grad_loss(xhat, tgtd) if args.lam_grad > 0 else 0.0 * loss
+                    if args.lam_fft > 0: sl = sl + args.lam_fft * fft_loss(xhat, tgtd, hf=not args.fft_flat)
+                    loss = loss + sl; l_rec = l_rec + sl
             tdec = predictor(tA, dt) if do_future else None
             if do_future:                                           # future-field recon (non-collapsible)
                 lf = F.mse_loss(model.decoder(tdec, coords[iq]), tgt_f); loss = loss + lf; l_rec = l_rec + lf
