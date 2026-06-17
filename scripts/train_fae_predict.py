@@ -48,6 +48,22 @@ def participation_ratio(Z):
     return float(e.sum() ** 2 / max((e ** 2).sum(), 1e-30))
 
 
+def grad_loss(a, b):
+    """L2 on spatial first-differences (edges) — penalizes blur / spectral bias. a,b: (B,C,H,W)."""
+    return (F.mse_loss(a[..., 1:, :] - a[..., :-1, :], b[..., 1:, :] - b[..., :-1, :])
+            + F.mse_loss(a[..., :, 1:] - a[..., :, :-1], b[..., :, 1:] - b[..., :, :-1]))
+
+
+def fft_loss(a, b, hf=True):
+    """L2 in 2D Fourier magnitude, optionally |freq|-weighted to up-weight high frequencies."""
+    d = (torch.fft.rfft2(a, norm="ortho") - torch.fft.rfft2(b, norm="ortho")).abs() ** 2   # (B,C,H,Wf)
+    if hf:
+        fy = torch.fft.fftfreq(a.shape[-2], device=a.device).abs()
+        fx = torch.fft.rfftfreq(a.shape[-1], device=a.device)
+        d = d * (fy[:, None] ** 2 + fx[None, :] ** 2).sqrt()[None, None]
+    return d.mean()
+
+
 @torch.no_grad()
 def embed(model, ds, coords, idx, batch=128):
     """frozen encoder on frame 0 -> (mean+std, mean) readouts for single-frame eval."""
@@ -108,6 +124,10 @@ def main():
     ap.add_argument("--save", action="store_true")
     ap.add_argument("--dataset", choices=["shear", "flowbench"], default="shear")
     ap.add_argument("--in_chans", type=int, default=None, help="default 4 (shear) / 3 (flowbench)")
+    ap.add_argument("--norm_target", action="store_true", help="per-sample per-channel amplitude-stripped recon target")
+    ap.add_argument("--lam_grad", type=float, default=0.0, help="gradient-loss weight (spectral-bias fix)")
+    ap.add_argument("--lam_fft", type=float, default=0.0, help="FFT/spectral-loss weight (spectral-bias fix)")
+    ap.add_argument("--fft_flat", action="store_true", help="FFT loss WITHOUT high-freq weighting")
     args = ap.parse_args()
     torch.manual_seed(args.seed); np.random.seed(args.seed)
     R = args.resolution; NPIX = R * R
@@ -134,6 +154,7 @@ def main():
     loader = DataLoader(tr, batch_size=args.batch, shuffle=True, drop_last=True,
                         num_workers=4, pin_memory=True)
     coords = make_coords_2d(n_side=R, device=DEVICE)
+    DS = 64; coords_d = make_coords_2d(n_side=DS, device=DEVICE)   # dense grid for grad/fft spectral losses
 
     model = FAE(emb_dim=args.emb_dim, num_iter=args.num_iter, depth_per_iter=4,
                 num_latents=args.num_latents, num_cross_heads=4, num_self_heads=8,
@@ -175,7 +196,19 @@ def main():
             loss = torch.zeros((), device=DEVICE); l_rec = torch.zeros((), device=DEVICE)
             l_std = torch.tensor(0.0)
             if do_present:                                          # anchor latent to the input x_t
-                lp = F.mse_loss(model.decoder(tA, coords[iq]), tgt_t); loss = loss + lp; l_rec = l_rec + lp
+                pred_t = model.decoder(tA, coords[iq])
+                if args.norm_target:                                # strip per-sample per-channel amplitude
+                    sc = fa.std(dim=(2, 3)).unsqueeze(1).clamp_min(0.5)   # (B,1,C); floor: down-weight loud samples, don't amplify flat channels
+                    lp = F.mse_loss(pred_t / sc, tgt_t / sc)
+                else:
+                    lp = F.mse_loss(pred_t, tgt_t)
+                loss = loss + lp; l_rec = l_rec + lp
+                if args.lam_grad > 0 or args.lam_fft > 0:          # dense decode -> spectral-bias losses
+                    Bc, Cc = fa.size(0), fa.size(1)
+                    xhat = model.decoder(tA, coords_d).reshape(Bc, DS, DS, Cc).permute(0, 3, 1, 2)
+                    tgtd = F.interpolate(fa, size=(DS, DS), mode="bilinear", align_corners=False)
+                    if args.lam_grad > 0: loss = loss + args.lam_grad * grad_loss(xhat, tgtd)
+                    if args.lam_fft > 0: loss = loss + args.lam_fft * fft_loss(xhat, tgtd, hf=not args.fft_flat)
             tdec = predictor(tA, dt) if do_future else None
             if do_future:                                           # future-field recon (non-collapsible)
                 lf = F.mse_loss(model.decoder(tdec, coords[iq]), tgt_f); loss = loss + lf; l_rec = l_rec + lf

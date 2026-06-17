@@ -65,10 +65,10 @@ def probe2(Ztr, Ytr, Zva, Yva):
     return out
 
 
-def build_model(method, resolution=224, n_frames=1, tubelet=2, in_chans=4):
+def build_model(method, resolution=224, n_frames=1, tubelet=2, in_chans=4, norm_pix=False):
     if method in ("ae", "mae"):
         from benchmarks.mae.mae import mae_physics
-        return mae_physics(img_size=resolution, in_chans=in_chans).to(DEVICE)
+        return mae_physics(img_size=resolution, in_chans=in_chans, norm_pix_loss=norm_pix).to(DEVICE)
     if method == "videomae":
         from benchmarks.mae.videomae import videomae_physics
         return videomae_physics(img_size=resolution, num_frames=n_frames, in_chans=in_chans).to(DEVICE)
@@ -122,6 +122,7 @@ def main():
     ap.add_argument("--tag", default="v1")
     ap.add_argument("--dataset", choices=["shear", "flowbench"], default="shear")
     ap.add_argument("--in_chans", type=int, default=None, help="default 4 (shear) / 3 (flowbench)")
+    ap.add_argument("--norm_pix", action="store_true", help="MAE per-patch normalized target (Kaiming best)")
     args = ap.parse_args()
     torch.manual_seed(args.seed); np.random.seed(args.seed)
 
@@ -149,7 +150,7 @@ def main():
     loader = DataLoader(tr, batch_size=args.batch, shuffle=True, drop_last=True,
                         num_workers=args.workers, pin_memory=True)
 
-    model = build_model(args.method, args.resolution, args.n_frames, args.tubelet, in_chans)
+    model = build_model(args.method, args.resolution, args.n_frames, args.tubelet, in_chans, args.norm_pix)
     npar = sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e6
     print(f"  params(trainable)={npar:.2f}M", flush=True)
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=wd, betas=cfg["betas"])
