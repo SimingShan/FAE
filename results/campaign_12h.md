@@ -100,3 +100,10 @@ differentiator); ours marginally better on fine-scale (enstrophy/scalar_grad) + 
 CAVEAT: I-JEPA & ST-JEPA use SIMPLIFIED random ctx/tgt masking (sample_masks), NOT authentic I-JEPA block-
 masking → may be artificially weak. I-JEPA Sc=0.13/PR=3.2 thin. => DO NOT claim I-JEPA/ST-JEPA win until
 upgraded to block-masking (or run external authentic JEPA). Held ST-JEPA seeds; VideoMAE seeds kept.
+
+### VideoMAE SEEDED (3 seeds, faithful, a40): 4f=0.42/0.39, 8f=0.47/0.44, 16f=0.50/0.45 (logRe/Sc).
+ours twoview 0.455/0.242: beat MAE(0.40), ~match VideoMAE-8f logRe, lose to 16f, lose Sc to all VideoMAE.
+Faithful-baseline column SOLID. I-JEPA/ST-JEPA still caveated (simplified masking, pending block-mask fix).
+### NEXT DIRECTION (discussed): complex-geometry benchmark = FlowBench (Cd/Cl/Nu coefficients, SDF geometry).
+Plan: vet trivial floor on LDC-128 slice (~1.3GB), then ~60 FPO sims (~60GB) for geometry+dynamics. Unified
+matched-scale loader (224², ~11k snapshots, short Δ) across Well + FlowBench. Well useful subset ~9GB (439GB raw).

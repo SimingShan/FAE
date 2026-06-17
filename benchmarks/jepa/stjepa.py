@@ -16,7 +16,25 @@ import torch.nn.functional as F
 from timm.models.vision_transformer import Block
 
 from benchmarks.mae.videomae import get_3d_sincos_pos_embed
-from benchmarks.jepa.ijepa2d import apply_masks, sample_masks
+from benchmarks.jepa.ijepa2d import apply_masks, sample_masks, _block
+
+
+def sample_tube_block_masks(batch, t_grid, s_grid, n_targets=4, device="cpu"):
+    """FAITHFUL V-JEPA-style spatio-temporal masking: sample I-JEPA spatial blocks
+    (4 targets + 1 context-minus-targets) on the s_grid x s_grid plane, then extend
+    each as a TUBE across all t_grid temporal positions. Shared across the batch."""
+    tgt2d = torch.zeros(s_grid, s_grid, dtype=torch.bool, device=device)
+    for _ in range(n_targets):
+        tgt2d |= _block(s_grid, s_grid, 0.15, 0.2, 0.75, 1.5, device)
+    ctx2d = _block(s_grid, s_grid, 0.85, 1.0, 1.0, 1.0, device) & ~tgt2d
+    if not ctx2d.any():
+        ctx2d = ~tgt2d
+    S = s_grid * s_grid
+    sp_ctx = ctx2d.flatten().nonzero(as_tuple=True)[0]
+    sp_tgt = tgt2d.flatten().nonzero(as_tuple=True)[0]
+    ci = torch.cat([sp_ctx + t * S for t in range(t_grid)])
+    ti = torch.cat([sp_tgt + t * S for t in range(t_grid)])
+    return ci[None].expand(batch, -1), ti[None].expand(batch, -1)
 
 
 class PatchEmbed3D(nn.Module):

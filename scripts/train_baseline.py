@@ -85,10 +85,13 @@ def loss_step(method, model, x, args):
         return model(x, mask_ratio=0.0)[0]
     if method in ("mae", "videomae"):
         return model(x, mask_ratio=args.mask_ratio)[0]
-    from benchmarks.jepa.ijepa2d import sample_masks                     # ijepa / stjepa
-    P = model.num_patches                                               # scale masks to patch count
-    n_ctx = max(8, int(args.ctx_frac * P)); n_tgt = max(4, int(args.tgt_frac * P))
-    ctx, tgt = sample_masks(x.size(0), P, n_ctx, n_tgt, DEVICE)
+    pe = model.encoder.patch_embed                                      # FAITHFUL block masking
+    if method == "stjepa":
+        from benchmarks.jepa.stjepa import sample_tube_block_masks
+        ctx, tgt = sample_tube_block_masks(x.size(0), pe.t_grid, pe.s_grid, device=DEVICE)
+    else:                                                               # ijepa (2D)
+        from benchmarks.jepa.ijepa2d import sample_block_masks
+        ctx, tgt = sample_block_masks(x.size(0), pe.grid, pe.grid, device=DEVICE)
     pred, h = model(x, ctx, tgt)
     return F.smooth_l1_loss(pred, h)
 

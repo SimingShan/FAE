@@ -44,9 +44,38 @@ def apply_masks(x, idx):
 
 
 def sample_masks(batch, num_patches, n_ctx, n_tgt, device):
-    """Disjoint random context + target patch indices per item."""
+    """Disjoint random context + target patch indices per item (simplified — kept for ref)."""
     perm = torch.rand(batch, num_patches, device=device).argsort(dim=1)
     return perm[:, :n_ctx], perm[:, n_ctx:n_ctx + n_tgt]
+
+
+def _block(gh, gw, smin, smax, armin, armax, device):
+    """A contiguous rectangular block of patches: area=scale*GH*GW, given aspect ratio."""
+    s = (smin + (smax - smin) * torch.rand(1, device=device)).item()
+    ar = (armin + (armax - armin) * torch.rand(1, device=device)).item()
+    area = s * gh * gw
+    h = max(1, min(int(round((area * ar) ** 0.5)), gh))
+    w = max(1, min(int(round((area / ar) ** 0.5)), gw))
+    top = torch.randint(0, gh - h + 1, (1,), device=device).item()
+    left = torch.randint(0, gw - w + 1, (1,), device=device).item()
+    m = torch.zeros(gh, gw, dtype=torch.bool, device=device)
+    m[top:top + h, left:left + w] = True
+    return m
+
+
+def sample_block_masks(batch, gh, gw, n_targets=4, device="cpu"):
+    """FAITHFUL I-JEPA multi-block masking (Assran et al. 2023): 4 target blocks
+    (scale 0.15-0.2, aspect 0.75-1.5), context = one large block (scale 0.85-1.0)
+    MINUS the target region. Shared across the batch (as in the I-JEPA collator)."""
+    tgt = torch.zeros(gh, gw, dtype=torch.bool, device=device)
+    for _ in range(n_targets):
+        tgt |= _block(gh, gw, 0.15, 0.2, 0.75, 1.5, device)
+    ctx = _block(gh, gw, 0.85, 1.0, 1.0, 1.0, device) & ~tgt
+    ci = ctx.flatten().nonzero(as_tuple=True)[0]
+    ti = tgt.flatten().nonzero(as_tuple=True)[0]
+    if ci.numel() == 0:
+        ci = (~tgt).flatten().nonzero(as_tuple=True)[0]
+    return ci[None].expand(batch, -1), ti[None].expand(batch, -1)
 
 
 class ViT2D(nn.Module):

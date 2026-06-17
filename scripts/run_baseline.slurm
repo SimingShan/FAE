@@ -1,10 +1,10 @@
 #!/bin/bash
 #SBATCH --job-name=base
 #SBATCH --partition=gpu
-#SBATCH --gpus=1
+#SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=128G
-#SBATCH --time=08:00:00
+#SBATCH --mem=64G
+#SBATCH --time=00:45:00
 #SBATCH --output=logs/base_%j.out
 #SBATCH --error=logs/base_%j.err
 set -e
