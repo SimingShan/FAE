@@ -20,9 +20,12 @@ from benchmarks.jepa.ijepa2d import apply_masks, sample_masks, _block
 
 
 def sample_tube_block_masks(batch, t_grid, s_grid, n_targets=4, device="cpu"):
-    """FAITHFUL V-JEPA-style spatio-temporal masking: sample I-JEPA spatial blocks
-    (4 targets + 1 context-minus-targets) on the s_grid x s_grid plane, then extend
-    each as a TUBE across all t_grid temporal positions. Shared across the batch."""
+    """V-JEPA-style spatio-temporal TUBE-block masking, SIMPLIFIED from the reference
+    facebookresearch/jepa `multiblock3d.py`: we sample I-JEPA spatial blocks (4 targets +
+    1 context-minus-targets) on the s_grid x s_grid plane and extend each as a full TUBE
+    across all t_grid temporal positions. The reference additionally uses TWO mask types
+    (short- & long-range) and a temporal-extent cap (max_context_duration); we use a single
+    full-temporal tube with the I-JEPA 2D scales. Faithful in spirit; not a verbatim port."""
     tgt2d = torch.zeros(s_grid, s_grid, dtype=torch.bool, device=device)
     for _ in range(n_targets):
         tgt2d |= _block(s_grid, s_grid, 0.15, 0.2, 0.75, 1.5, device)

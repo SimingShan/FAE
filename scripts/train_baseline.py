@@ -84,7 +84,8 @@ def loss_step(method, model, x, args):
     if method == "ae":
         return model(x, mask_ratio=0.0)[0]
     if method in ("mae", "videomae"):
-        return model(x, mask_ratio=args.mask_ratio)[0]
+        mr = 0.9 if method == "videomae" else args.mask_ratio   # VideoMAE's signature ratio is 0.9
+        return model(x, mask_ratio=mr)[0]
     pe = model.encoder.patch_embed                                      # FAITHFUL block masking
     if method == "stjepa":
         from benchmarks.jepa.stjepa import sample_tube_block_masks
