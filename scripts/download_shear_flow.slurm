@@ -11,7 +11,7 @@
 # Portable: no cluster paths here; set them in scripts/env.sh (or export
 # THE_WELL_DATA_DIR / WFAE_ENV / WFAE_REPO). For speed also: export HF_TOKEN=hf_xxx
 set -e
-source "$(dirname "$0")/env.sh"
+source "${SLURM_SUBMIT_DIR:-.}/scripts/env.sh"
 mkdir -p "$THE_WELL_DATA_DIR"
 echo "[$(date)] downloading shear_flow -> $THE_WELL_DATA_DIR/shear_flow"
 python -c "

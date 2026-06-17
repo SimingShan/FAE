@@ -12,7 +12,7 @@
 # 100 epochs, n_seed 24, res 224) then self-evals with the frozen linear probe.
 # Same dataset + batch + epochs => matched optimizer steps (Hard-Rule #4).
 set -e
-source "$(dirname "$0")/env.sh"
+source "${SLURM_SUBMIT_DIR:-.}/scripts/env.sh"
 
 TAG=align224
 METHODS=(fae ae mae ijepa)

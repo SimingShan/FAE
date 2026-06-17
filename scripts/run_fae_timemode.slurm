@@ -14,7 +14,7 @@
 #   coord + vicreg:       coord     5 100 5  t_coord_vicreg
 # batch 32 (matched across all; safe for aggregate's per-frame B*T encode).
 set -e
-source "$(dirname "$0")/env.sh"
+source "${SLURM_SUBMIT_DIR:-.}/scripts/env.sh"
 echo "[$(date)] time_mode=$1 sim=$2 std=$3 cov=$4 tag=$5"
 python scripts/train_fae_shear.py --temporal --n_frames 16 --time_mode "$1" \
     --sim "$2" --std "$3" --cov "$4" --resolution 224 \

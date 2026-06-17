@@ -11,6 +11,6 @@
 # The trainer runs its own 3D linear probe each eval (eval_linear_probe is
 # single-frame-only, so it is NOT called here).
 set -e
-source "$(dirname "$0")/env.sh"
+source "${SLURM_SUBMIT_DIR:-.}/scripts/env.sh"
 python scripts/train_fae_shear.py --temporal --n_frames 16 --epochs 100 \
     --batch 64 --n_seed 24 --tag align224t

@@ -8,5 +8,5 @@
 #SBATCH --output=logs/batt_%j.out
 #SBATCH --error=logs/batt_%j.err
 set -e
-source "$(dirname "$0")/env.sh"
+source "${SLURM_SUBMIT_DIR:-.}/scripts/env.sh"
 python scripts/eval_battery.py --ckpt results/checkpoints/g1/faep_twoview_tvb_s0.pt

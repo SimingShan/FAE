@@ -8,6 +8,6 @@
 #SBATCH --output=logs/faep_%j.out
 #SBATCH --error=logs/faep_%j.err
 set -e
-source "$(dirname "$0")/env.sh"
+source "${SLURM_SUBMIT_DIR:-.}/scripts/env.sh"
 # args: MODE SEED TAG "EXTRA"
 python scripts/train_fae_predict.py --mode $1 --seed $2 --epochs 80 --tag $3 $4

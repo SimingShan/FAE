@@ -8,7 +8,7 @@
 #SBATCH --output=logs/pdens_%j.out
 #SBATCH --error=logs/pdens_%j.err
 set -e
-source "$(dirname "$0")/env.sh"
+source "${SLURM_SUBMIT_DIR:-.}/scripts/env.sh"
 echo "##### TWOVIEW (full train) #####"
 python scripts/eval_probe_density.py --ckpt results/checkpoints/g1/faep_twoview_tvb_s0.pt --n_seed 24 --stride 4 2>/dev/null
 echo "##### PURE RECON (full train) #####"

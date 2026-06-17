@@ -8,5 +8,5 @@
 #SBATCH --output=logs/diag_%j.out
 #SBATCH --error=logs/diag_%j.err
 set -e
-source "$(dirname "$0")/env.sh"
+source "${SLURM_SUBMIT_DIR:-.}/scripts/env.sh"
 for c in "$@"; do echo "########## $c"; python scripts/diag_time_invariance.py --ckpt "$c"; done

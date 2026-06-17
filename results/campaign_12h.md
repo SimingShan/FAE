@@ -94,3 +94,9 @@ single-frame information limit.
 ### BATTERY on MAE (generality head-to-head): kin_energy 0.999, enstrophy 0.993, scalar_var 0.993,
 scalar_grad 0.905, press_var 0.998 | logRe 0.357, Sc 0.207. => MAE is ALSO general (generality NOT our
 differentiator); ours marginally better on fine-scale (enstrophy/scalar_grad) + clearly on logRe (0.45 vs 0.36).
+
+### FAITHFULNESS AUDIT (baselines): CONVERGENCE clean — all plateau by ep80 (loss down, probe flat, PR healthy
+6.5/5.4/3.2/3.5), NOT undertrained. MAE & VideoMAE = faithful standard recipes (comparison SOLID).
+CAVEAT: I-JEPA & ST-JEPA use SIMPLIFIED random ctx/tgt masking (sample_masks), NOT authentic I-JEPA block-
+masking → may be artificially weak. I-JEPA Sc=0.13/PR=3.2 thin. => DO NOT claim I-JEPA/ST-JEPA win until
+upgraded to block-masking (or run external authentic JEPA). Held ST-JEPA seeds; VideoMAE seeds kept.

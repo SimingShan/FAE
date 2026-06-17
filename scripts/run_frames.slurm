@@ -9,7 +9,7 @@
 #SBATCH --error=logs/frames_%j.err
 # args: SEED NFRAMES EPOCHS TAG   (NFRAMES<=1 => non-temporal single-frame anchor)
 set -e
-source "$(dirname "$0")/env.sh"
+source "${SLURM_SUBMIT_DIR:-.}/scripts/env.sh"
 NF=$2
 if [ "$NF" -le 1 ]; then MODE=""; B=256; else MODE="--temporal --n_frames $NF"; if [ "$NF" -ge 8 ]; then B=64; else B=128; fi; fi
 echo "[$(date)] seed=$1 nframes=$NF batch=$B tag=$4 mode=$MODE"

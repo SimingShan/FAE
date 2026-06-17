@@ -10,7 +10,7 @@
 # Cross-paper parity: Qu et al. attentive probe on our frozen encoders.
 # Headline (FAE-temporal) first, then single-frame methods. No set -e so one
 # failure doesn't kill the rest. 256G for the 16-frame window load.
-source "$(dirname "$0")/env.sh"
+source "${SLURM_SUBMIT_DIR:-.}/scripts/env.sh"
 CK=results/checkpoints/g1
 
 echo "######## FAE temporal 16f (headline) ########"

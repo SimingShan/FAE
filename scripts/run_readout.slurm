@@ -8,7 +8,7 @@
 #SBATCH --output=logs/reprobe_%j.out
 #SBATCH --error=logs/reprobe_%j.err
 set -e
-source "$(dirname "$0")/env.sh"
+source "${SLURM_SUBMIT_DIR:-.}/scripts/env.sh"
 C=results/checkpoints/g1
 python scripts/eval_baseline_readout.py --ckpt \
   $C/mae_shear_mae_nf1.pt $C/ijepa_shear_ijepa_nf1.pt \

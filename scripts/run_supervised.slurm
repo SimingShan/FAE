@@ -8,6 +8,6 @@
 #SBATCH --output=logs/sup_%j.out
 #SBATCH --error=logs/sup_%j.err
 set -e
-source "$(dirname "$0")/env.sh"
+source "${SLURM_SUBMIT_DIR:-.}/scripts/env.sh"
 # args: SEED FRAMES TAG  (readout fixed meanstd, dt_max 4)
 python scripts/train_supervised.py --seed $1 --frames $2 --dt_max 4 --readout meanstd --epochs 80 --tag $3

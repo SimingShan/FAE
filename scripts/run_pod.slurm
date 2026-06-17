@@ -8,5 +8,5 @@
 #SBATCH --output=logs/pod_%j.out
 #SBATCH --error=logs/pod_%j.err
 set -e
-source "$(dirname "$0")/env.sh"
+source "${SLURM_SUBMIT_DIR:-.}/scripts/env.sh"
 python scripts/eval_pod_rank.py

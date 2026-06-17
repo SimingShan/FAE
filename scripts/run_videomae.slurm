@@ -10,6 +10,6 @@
 # Video MAE pretrained FROM SCRATCH (tube-mask 0.9) on 16-frame clips, frozen
 # LINEAR probe — the fair temporal pixel baseline, same pipeline/probe as
 # FAE-temporal / AE / MAE / I-JEPA. 256G for the 16-frame window load.
-source "$(dirname "$0")/env.sh"
+source "${SLURM_SUBMIT_DIR:-.}/scripts/env.sh"
 python scripts/train_baseline.py --method videomae --epochs 100 --batch 64 \
     --mask_ratio 0.9 --resolution 224 --n_seed 24 --workers 8 --tag align224t

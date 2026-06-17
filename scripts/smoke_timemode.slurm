@@ -10,7 +10,7 @@
 # Fast GPU gate: run the real temporal training path for BOTH time modes,
 # tiny (n_seed 1, 1 epoch). If both print a probe line + save, the 3 real
 # experiments are safe to launch.
-source "$(dirname "$0")/env.sh"
+source "${SLURM_SUBMIT_DIR:-.}/scripts/env.sh"
 for tm in coord aggregate; do
     echo "######## SMOKE time_mode=$tm ########"
     python scripts/train_fae_shear.py --temporal --n_frames 16 --time_mode $tm \

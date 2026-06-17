@@ -9,5 +9,5 @@
 # The gate (Hard-Rule #1): trivial linear-probe floor at the aligned config
 # (224 res, raw Schmidt). Re-measures the now-stale 128²/log-Sc floor. CPU only.
 set -e
-source "$(dirname "$0")/env.sh"
+source "${SLURM_SUBMIT_DIR:-.}/scripts/env.sh"
 python scripts/eval_linear_probe.py --method trivial --resolution 224 --n_seed 24
