@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=fb_base
 #SBATCH --partition=gpu
-#SBATCH --gres=gpu:a40:1
+#SBATCH --gres=gpu:h100:1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=64G
 #SBATCH --time=00:40:00
