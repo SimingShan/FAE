@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wfae"
+version = "0.1.0"
+description = "Functional AutoEncoder representation learning for 2D PDE physics fields (FAE), with the SSLForPDEs NS head-to-head + rollout suite."
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.0",
+    "torchvision",
+    "numpy",
+    "scipy",
+    "scikit-learn",
+    "h5py",
+    "huggingface_hub",
+    "matplotlib",
+    "tqdm",
+    "pyyaml",
+]
+
+[project.optional-dependencies]
+# needed only to run THEIR VICReg baseline (external/SSLForPDEs)
+vicreg = ["submitit", "tensorboard"]
+
+[tool.setuptools]
+packages = ["src", "src.data", "src.models", "src.metrics", "src.cond_unet", "src.utils"]
+
+[tool.setuptools.package-dir]
+"" = "."

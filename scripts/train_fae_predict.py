@@ -122,15 +122,16 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--tag", default="faep")
     ap.add_argument("--save", action="store_true")
-    ap.add_argument("--dataset", choices=["shear", "flowbench"], default="shear")
-    ap.add_argument("--in_chans", type=int, default=None, help="default 4 (shear) / 3 (flowbench)")
+    ap.add_argument("--dataset", choices=["shear", "flowbench", "ns"], default="shear")
+    ap.add_argument("--in_chans", type=int, default=None, help="default 4 (shear) / 3 (flowbench,ns)")
     ap.add_argument("--norm_target", action="store_true", help="per-sample per-channel amplitude-stripped recon target")
     ap.add_argument("--lam_grad", type=float, default=0.0, help="gradient-loss weight (spectral-bias fix)")
     ap.add_argument("--lam_fft", type=float, default=0.0, help="FFT/spectral-loss weight (spectral-bias fix)")
     ap.add_argument("--fft_flat", action="store_true", help="FFT loss WITHOUT high-freq weighting")
     ap.add_argument("--drop_l2", action="store_true", help="present recon uses ONLY grad/fft (no L2 pixel term)")
     args = ap.parse_args()
-    torch.manual_seed(args.seed); np.random.seed(args.seed)
+    from src.utils import set_seed
+    set_seed(args.seed)
     R = args.resolution; NPIX = R * R
     pred_mode = args.mode != "recon"                       # uses (t, t+Δ) clip + predictor
     do_present = args.mode in ("recon", "recon_both", "siam", "twoview")   # recon x_t (anchor)
@@ -140,8 +141,13 @@ def main():
     print(f"=== FAE-{args.mode} [{args.tag}] dt_max={args.dt_max} mcnt={args.mcnt} "
           f"n_query={args.n_query} res={R} ===", flush=True)
 
-    in_chans = args.in_chans if args.in_chans is not None else (3 if args.dataset == "flowbench" else 4)
-    if args.dataset == "flowbench":
+    in_chans = args.in_chans if args.in_chans is not None else (3 if args.dataset in ("flowbench", "ns") else 4)
+    if args.dataset == "ns":
+        from src.data.ns import NSDataset
+        PARAMS[:] = ["buoyancy"]
+        tr = NSDataset("train", side=R, mode="clip", clip_len=clip_len, frame_stride=args.frame_stride, n_traj=8)
+        va = NSDataset("valid", side=R, mode="clip", clip_len=clip_len, frame_stride=args.frame_stride, n_traj=8, stats=tr.stats)
+    elif args.dataset == "flowbench":
         from src.data.flowbench import FlowBenchFPO
         PARAMS[:] = ["Strouhal"]
         tr = FlowBenchFPO("train", side=R, mode="clip", clip_len=clip_len, frame_stride=args.frame_stride)
