@@ -24,8 +24,13 @@ def set_seed(seed: int, deterministic: bool = False):
 
 
 def seed_worker(worker_id: int):
-    """DataLoader worker_init_fn: gives each worker a distinct-but-deterministic seed."""
-    s = (np.random.get_state()[1][0] + worker_id) % (2 ** 32)
+    """DataLoader worker_init_fn: gives each worker a distinct-but-deterministic seed.
+    Uses torch's per-worker initial_seed (the recommended pattern) to avoid uint32 overflow."""
+    try:
+        import torch
+        s = torch.initial_seed() % (2 ** 32)
+    except ImportError:
+        s = (int(np.random.get_state()[1][0]) + worker_id) % (2 ** 32)
     np.random.seed(s)
     random.seed(s)
 
