@@ -57,8 +57,7 @@ def load_fae(ckpt_path):
     inc = a.get("in_chans") or (3 if a.get("dataset") in ("ns", "flowbench") else 4)
     model = FAE(emb_dim=a["emb_dim"], num_iter=a["num_iter"], depth_per_iter=4,
                 num_latents=a["num_latents"], num_cross_heads=4, num_self_heads=8,
-                n_freq=32, max_freq=32, coord_dim=2, in_chans=inc,
-                decoder_kind=a["decoder_kind"], decoder_num_blocks=a["dec_blocks"]).to(DEVICE)
+                n_freq=32, max_freq=32, coord_dim=2, in_chans=inc).to(DEVICE)
     model.load_state_dict(ck["model"])
     coords = make_coords_2d(n_side=R, device=DEVICE)
     g0 = torch.Generator(device=DEVICE).manual_seed(0)

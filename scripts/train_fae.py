@@ -113,8 +113,6 @@ def main():
     ap.add_argument("--num_latents", type=int, default=128, help="encoder bottleneck width (capacity)")
     ap.add_argument("--num_iter", type=int, default=4, help="encoder cross/self iterations (depth)")
     ap.add_argument("--emb_dim", type=int, default=320)
-    ap.add_argument("--decoder_kind", choices=["senseiver", "cvit"], default="senseiver")
-    ap.add_argument("--dec_blocks", type=int, default=2, help="cvit decoder blocks (capacity)")
     ap.add_argument("--proj_dim", type=int, default=4096)
     ap.add_argument("--n_seed", type=int, default=24)
     ap.add_argument("--frame_stride", type=int, default=4)
@@ -165,10 +163,9 @@ def main():
 
     model = FAE(emb_dim=args.emb_dim, num_iter=args.num_iter, depth_per_iter=4,
                 num_latents=args.num_latents, num_cross_heads=4, num_self_heads=8,
-                n_freq=32, max_freq=32, coord_dim=2, in_chans=in_chans,
-                decoder_kind=args.decoder_kind, decoder_num_blocks=args.dec_blocks).to(DEVICE)
+                n_freq=32, max_freq=32, coord_dim=2, in_chans=in_chans).to(DEVICE)
     npar = sum(p.numel() for p in model.parameters()) / 1e6
-    print(f"  num_latents={args.num_latents} num_iter={args.num_iter} dec={args.decoder_kind} "
+    print(f"  num_latents={args.num_latents} num_iter={args.num_iter} "
           f"params={npar:.2f}M", flush=True)
     predictor = TokenPredictor(args.emb_dim, depth=args.pred_depth, heads=8).to(DEVICE) if pred_mode else None
     proj = make_projector(320, args.proj_dim).to(DEVICE) if use_vic else None

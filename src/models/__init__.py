@@ -7,6 +7,6 @@
 MAE / I-JEPA baselines live in ``benchmarks/``. Older 1D-G1 models
 (fae_np, jepa_vit, baselines, zoo) are archived under ``arxiv/``.
 """
-from .fae import FAE, FAEEncoder, SenseiverDecoder, CViTDecoder, fourier_features
+from .fae import FAE, FAEEncoder, SenseiverDecoder, fourier_features
 
-__all__ = ["FAE", "FAEEncoder", "SenseiverDecoder", "CViTDecoder", "fourier_features"]
+__all__ = ["FAE", "FAEEncoder", "SenseiverDecoder", "fourier_features"]

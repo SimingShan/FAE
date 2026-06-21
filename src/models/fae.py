@@ -11,9 +11,8 @@ Components
 - ``FAEEncoder``      tokens = cross-attn(latents -> sensor tokens) + self-attn.
                       Senseiver-style weight sharing: a distinct first layer,
                       then one shared layer applied (num_iter - 1) times.
-- ``SenseiverDecoder``  single cross-attention readout (default).
-- ``CViTDecoder``       deeper readout: N blocks of
-                        [cross-attn -> MLP -> self-attn(queries) -> MLP].
+- ``SenseiverDecoder``  single cross-attention readout; each query decoded
+                        independently (resolution-free neural-operator decode).
 - ``FAE``               encoder + decoder;
                         forward: (u, in_coords, query_coords) -> (pred, tokens).
 
@@ -26,9 +25,7 @@ Training recipes live in ``scripts/train_fae.py``:
                   through an 8192^3 projector. This is the deterministic
                   core method.
 
-Note: class names were modernized from the original V3 implementation
-(``PerceiverSparseAEV3`` -> ``FAE`` etc.); module attribute names are
-unchanged, so existing checkpoints load with ``strict=True``.
+Module attribute names are stable, so existing checkpoints load with ``strict=True``.
 """
 from __future__ import annotations
 import math
@@ -58,19 +55,6 @@ class SenseiverMLP(nn.Module):
         self.fc1 = nn.Linear(dim, dim)
         self.act = nn.GELU()
         self.fc2 = nn.Linear(dim, dim)
-
-    def forward(self, x):
-        return self.fc2(self.act(self.fc1(self.norm(x))))
-
-
-class WiderMLP(nn.Module):
-    """LayerNorm -> Linear(D, mult*D) -> GELU -> Linear(mult*D, D). Standard FFN."""
-    def __init__(self, dim: int, mult: int = 2):
-        super().__init__()
-        self.norm = nn.LayerNorm(dim)
-        self.fc1 = nn.Linear(dim, dim * mult)
-        self.act = nn.GELU()
-        self.fc2 = nn.Linear(dim * mult, dim)
 
     def forward(self, x):
         return self.fc2(self.act(self.fc1(self.norm(x))))
@@ -266,123 +250,14 @@ class SenseiverDecoder(nn.Module):
         return q if return_feats else self.head(q)   # q = per-query feature (REPA alignment target)
 
 
-class CViTBlock(nn.Module):
-    """Cross-attn -> MLP -> self-attn(queries) -> MLP; all residual, pre-LN.
-
-    The self-attention between queries lets neighboring query points coordinate
-    (smoothness); the MLPs use standard 2x expansion.
-    """
-    def __init__(self, dim_q, dim_kv, num_heads, mlp_mult=2, dropout=0.0):
-        super().__init__()
-        self.cross    = Residual(CrossAttention(dim_q, dim_kv, num_heads, dropout), dropout)
-        self.cross_mlp = Residual(WiderMLP(dim_q, mlp_mult), dropout)
-        self.self_    = Residual(SelfAttention(dim_q, num_heads, dropout), dropout)
-        self.self_mlp = Residual(WiderMLP(dim_q, mlp_mult), dropout)
-
-    def forward(self, q, kv):
-        q = self.cross(q, kv)
-        q = self.cross_mlp(q)
-        q = self.self_(q)
-        q = self.self_mlp(q)
-        return q
-
-
-class CViTDecoder(nn.Module):
-    """Stack of CViTBlocks — a deeper, Perceiver-IO / CViT-style readout."""
-    def __init__(self, emb_dim_in=320, dec_dim=320, n_freq=32, max_freq=32,
-                  num_heads=4, num_blocks=2, mlp_mult=2, dropout=0.0,
-                  latent_size=1, coord_dim=2, out_chans=1):
-        super().__init__()
-        self.n_freq = n_freq
-        self.max_freq = max_freq
-        self.coord_dim = coord_dim
-
-        self.output_buffer = nn.Parameter(torch.empty(latent_size, dec_dim))
-        with torch.no_grad():
-            self.output_buffer.normal_(0.0, 0.02).clamp_(-2.0, 2.0)
-
-        coord_feat_dim = 2 * coord_dim * n_freq
-        self.query_proj = nn.Linear(coord_feat_dim + dec_dim, dec_dim)
-        self.blocks = nn.ModuleList([
-            CViTBlock(dec_dim, emb_dim_in, num_heads, mlp_mult, dropout)
-            for _ in range(num_blocks)
-        ])
-        self.head = nn.Linear(dec_dim, out_chans)
-
-    def forward(self, latents, query_coords):
-        if query_coords.dim() == 2:
-            query_coords = query_coords.unsqueeze(0).expand(latents.size(0), -1, -1)
-        B, N_q = query_coords.shape[:2]
-        cf = fourier_features(query_coords, self.n_freq, self.max_freq)
-        ob = self.output_buffer.unsqueeze(0).expand(B, N_q, -1)
-        q = self.query_proj(torch.cat([cf, ob], dim=-1))
-        for blk in self.blocks:
-            q = blk(q, latents)
-        return self.head(q)
-
-
 # ----------------------------------------------------------------------
 # Learned multi-query readout (optional)
 # ----------------------------------------------------------------------
-class QueryReadout(nn.Module):
-    """K learnable query tokens cross-attend the M encoder tokens -> (B, K, dim).
-
-    The mean-pool readout discards capacity the encoder retains (the latent
-    tokens carry intrinsic dim ~22, the mean ~10) and that capacity is NOT
-    linearly accessible post-hoc. A readout trained end-to-end UNDER the SSL
-    pressure can reorganize the token set into K*dim linearly-usable
-    coordinates. Representation = flatten(forward(tokens)).
-    """
-    def __init__(self, dim, num_queries=8, num_heads=4, depth=1, dropout=0.0):
-        super().__init__()
-        self.queries = nn.Parameter(torch.empty(1, num_queries, dim))
-        with torch.no_grad():
-            self.queries.normal_(0.0, 0.02).clamp_(-2.0, 2.0)
-        self.layers = nn.ModuleList([
-            CrossLayer(dim, dim, num_heads, dropout) for _ in range(depth)])
-        self.num_queries = num_queries
-
-    def forward(self, tokens):                  # (B, M, dim) -> (B, K, dim)
-        q = self.queries.expand(tokens.size(0), -1, -1)
-        for layer in self.layers:
-            q = layer(q, tokens)
-        return q
-
-
-# ----------------------------------------------------------------------
-# Temporal aggregation (CViT-style time handling)
-# ----------------------------------------------------------------------
-class TemporalAggregator(nn.Module):
-    """CViT-style time handling: per-frame latents (B, T, M, dim) -> temporal
-    self-attention over the T frames -> learned-query cross-attention pool ->
-    (B, M, dim). Contrast with the default 'coord' mode, where time is just a
-    third input coordinate (x, y, t) handled jointly by the encoder."""
-    def __init__(self, dim, num_heads=8, depth=1, dropout=0.0):
-        super().__init__()
-        self.frames = nn.ModuleList([SelfLayer(dim, num_heads, dropout) for _ in range(depth)])
-        self.query = nn.Parameter(torch.empty(1, 1, dim))
-        with torch.no_grad():
-            self.query.normal_(0.0, 0.02)
-        self.pool = CrossLayer(dim, dim, num_heads, dropout)
-
-    def forward(self, z):                                   # z: (B, T, M, dim)
-        B, T, M, D = z.shape
-        z = z.permute(0, 2, 1, 3).reshape(B * M, T, D)      # (B*M, T, dim)
-        for layer in self.frames:
-            z = layer(z)
-        q = self.query.expand(B * M, -1, -1)
-        return self.pool(q, z).reshape(B, M, D)             # (B, M, dim)
-
-
 # ----------------------------------------------------------------------
 # Full autoencoder
 # ----------------------------------------------------------------------
 class FAE(nn.Module):
-    """Function AutoEncoder: FAEEncoder + configurable decoder.
-
-    decoder_kind:
-      - "senseiver" (default): single cross-attention readout.
-      - "cvit": decoder_num_blocks x CViTBlock readout.
+    """Function AutoEncoder: FAEEncoder + SenseiverDecoder.
 
     forward: (u, in_coords, query_coords) -> (pred, tokens)
       u            (B, N, 1)      sensor values
@@ -396,79 +271,36 @@ class FAE(nn.Module):
                   n_freq=32, max_freq=32, val_dim=32,
                   dec_n_freq=32, dec_max_freq=32, dec_num_heads=4,
                   num_latents=128, dropout=0.0, coord_dim=2,
-                  decoder_kind="senseiver", decoder_num_blocks=2,
-                  decoder_mlp_mult=2, readout_queries=0, in_chans=1,
-                  time_mode="coord", n_frames=1):
+                  in_chans=1):
         super().__init__()
-        # time_mode "coord": encoder sees full coord_dim (e.g. (x,y,t)).
-        # time_mode "aggregate": encoder is spatial (coord_dim=2) per frame, a
-        #   TemporalAggregator pools over frames; decoder still queries (x,y,t).
         self.encoder = FAEEncoder(
             emb_dim=emb_dim, num_iter=num_iter, depth_per_iter=depth_per_iter,
             num_cross_heads=num_cross_heads, num_self_heads=num_self_heads,
             n_freq=n_freq, max_freq=max_freq, val_dim=val_dim,
             num_latents=num_latents, dropout=dropout,
-            coord_dim=(2 if time_mode == "aggregate" else coord_dim),
+            coord_dim=coord_dim,
             in_chans=in_chans)
-        if decoder_kind == "senseiver":
-            self.decoder = SenseiverDecoder(
-                emb_dim_in=emb_dim, dec_dim=emb_dim,
-                n_freq=dec_n_freq, max_freq=dec_max_freq,
-                num_heads=dec_num_heads, dropout=dropout,
-                latent_size=1, coord_dim=coord_dim, out_chans=in_chans)
-        elif decoder_kind == "cvit":
-            self.decoder = CViTDecoder(
-                emb_dim_in=emb_dim, dec_dim=emb_dim,
-                n_freq=dec_n_freq, max_freq=dec_max_freq,
-                num_heads=dec_num_heads, num_blocks=decoder_num_blocks,
-                mlp_mult=decoder_mlp_mult, dropout=dropout,
-                latent_size=1, coord_dim=coord_dim, out_chans=in_chans)
-        else:
-            raise ValueError(f"unknown decoder_kind={decoder_kind!r}")
-        self.decoder_kind = decoder_kind
+        self.decoder = SenseiverDecoder(
+            emb_dim_in=emb_dim, dec_dim=emb_dim,
+            n_freq=dec_n_freq, max_freq=dec_max_freq,
+            num_heads=dec_num_heads, dropout=dropout,
+            latent_size=1, coord_dim=coord_dim, out_chans=in_chans)
         self.emb_dim = emb_dim
         self.num_latents = num_latents
         self.coord_dim = coord_dim
-        self.time_mode = time_mode
-        self.n_frames = n_frames
-        self.temporal_agg = (TemporalAggregator(emb_dim, num_heads=num_self_heads, dropout=dropout)
-                             if time_mode == "aggregate" else None)
-        # Optional learned readout (0 = mean-pool, the default representation).
-        self.readout = (QueryReadout(emb_dim, readout_queries)
-                          if readout_queries > 0 else None)
-        self.readout_queries = readout_queries
 
     def represent(self, tokens):
-        """Pooled representation used downstream: mean-pool, or flattened
-        learned readout when one is configured."""
-        if self.readout is not None:
-            return self.readout(tokens).flatten(1)      # (B, K*emb_dim)
+        """Pooled representation used downstream: mean over the latent tokens."""
         return tokens.mean(dim=1)                        # (B, emb_dim)
 
     def encode_tokens(self, u, in_coords):
-        """Sensor values -> latent tokens (B, M, emb_dim), honoring time_mode.
-          coord:     u (B, N, C),    in_coords (N, coord_dim) -> joint encode.
-          aggregate: u (B, N, T, C), in_coords (N, 2)         -> per-frame encode
-                     then TemporalAggregator over the T frames."""
-        if self.time_mode == "aggregate":
-            B, N, T, C = u.shape
-            u_f = u.permute(0, 2, 1, 3).reshape(B * T, N, C)
-            tok = self.encoder(u_f, in_coords)               # (B*T, M, emb_dim)
-            tok = tok.reshape(B, T, tok.size(1), tok.size(2))
-            return self.temporal_agg(tok)                     # (B, M, emb_dim)
+        """Sensor values (B, N, C) + coords (N, coord_dim) -> latent tokens (B, M, emb_dim)."""
         return self.encoder(u, in_coords)
 
     def forward(self, u, in_coords, query_coords):
         tokens = self.encode_tokens(u, in_coords)
         pred = self.decoder(tokens, query_coords)
         return pred, tokens
-
-
-# Backward-compat aliases: original class names from the V3 implementation.
-PerceiverEncoderV3 = FAEEncoder
-DecoderV3 = SenseiverDecoder
-DecoderCViT = CViTDecoder
-PerceiverSparseAEV3 = FAE
 
 
 # ----------------------------------------------------------------------
