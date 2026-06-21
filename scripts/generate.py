@@ -128,17 +128,17 @@ def sample(model, n, C, R, y=None, cond=None, ncls=None, cfg=1.0, steps=50):
     for i in range(steps):
         t = torch.full((n,), 1 - i / steps, device=DEVICE)
         inp = x if cond is None else torch.cat([x, cond], 1)
-        v, _ = model(inp, t, y)
+        v, _ = model(inp, t, y); v = v[:, :C]                    # velocity is on the target channels only
         if yn is not None:
-            vu, _ = model(inp, t, yn); v = vu + cfg * (v[:, :C] - vu[:, :C])
-        x = x - (1 / steps) * v[:, :C]
+            vu, _ = model(inp, t, yn); v = vu[:, :C] + cfg * (v - vu[:, :C])
+        x = x - (1 / steps) * v
     return x
 
 
 # ---------------------------------------------------------------- train
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--mode", choices=["uncond", "param", "sparse"], default="uncond")
+    ap.add_argument("--mode", choices=["uncond", "param", "sparse", "all"], default="uncond")
     ap.add_argument("--align", choices=["none", "fae", "mae", "jepa"], default="none")
     ap.add_argument("--dataset", default="ns"); ap.add_argument("--resolution", type=int, default=64)
     ap.add_argument("--size", default="SiT-S/4"); ap.add_argument("--depth", type=int, default=4)
@@ -159,9 +159,9 @@ def main():
     sz = args.size.split("-")[1].split("/")[0]; patch = int(args.size.split("/")[1]); grid = R // patch
     extra = {"decoder_hidden_size": 384} if sz == "S" else {}
     zdim = 320 if args.align in ("none", "fae") else 256
-    in_ch = 2 * C if args.mode == "sparse" else C                    # sparse concats the FAE dense guess
+    in_ch = 2 * C if args.mode in ("sparse", "all") else C           # sparse/all concat the FAE dense guess
     ncls = 1
-    if args.mode == "param":
+    if args.mode in ("param", "all"):
         lab2cls, ncls = build_label_map(tr); print(f"  {ncls} param-classes", flush=True)
     model = SiT_models[args.size](input_size=R, in_channels=in_ch, num_classes=ncls, class_dropout_prob=0.1,
                                   z_dims=[zdim], encoder_depth=args.depth, fused_attn=False, qk_norm=False, **extra).to(DEVICE)
@@ -169,7 +169,7 @@ def main():
 
     # alignment + sparse-conditioning encoders (FAE is needed for sparse regardless of --align)
     fae = fc = fs = fp = enc = None
-    need_fae = args.align == "fae" or args.mode == "sparse"
+    need_fae = args.align == "fae" or args.mode in ("sparse", "all")
     if need_fae:
         fae, fc, fs, fp = fae_setup(args.fae_ckpt, R, patch)
     if args.align in ("mae", "jepa"):
@@ -182,14 +182,23 @@ def main():
     real = torch.from_numpy(np.stack([tr[i][0].numpy() for i in range(min(len(tr), 512))])).to(DEVICE)
     ref = radial_spectrum(real)
     g0 = torch.Generator(device=DEVICE).manual_seed(1)
-    ssub = torch.randperm(R * R, generator=g0, device=DEVICE)[:args.n_sensors] if args.mode == "sparse" else None
+    ssub = torch.randperm(R * R, generator=g0, device=DEVICE)[:args.n_sensors] if args.mode in ("sparse", "all") else None
 
     for ep in range(args.epochs):
         model.train()
         for x, yl in tl:
             x = x.to(DEVICE); n = x.size(0)
-            y = labels_to_cls(yl, lab2cls) if args.mode == "param" else torch.zeros(n, dtype=torch.long, device=DEVICE)
-            cond = fae_dense(fae, x, fc, ssub) if args.mode == "sparse" else None
+            if args.mode == "all":                                   # mixed conditioning + per-cond dropout (CFG-style)
+                up = (torch.rand(n, device=DEVICE) < 0.45); us = (torch.rand(n, device=DEVICE) < 0.45)
+                cls = labels_to_cls(yl, lab2cls)
+                y = torch.where(up, cls, torch.full_like(cls, ncls))         # null param-class = ncls
+                cond = fae_dense(fae, x, fc, ssub) * us[:, None, None, None].float()
+            elif args.mode == "param":
+                y = labels_to_cls(yl, lab2cls); cond = None
+            elif args.mode == "sparse":
+                y = torch.zeros(n, dtype=torch.long, device=DEVICE); cond = fae_dense(fae, x, fc, ssub)
+            else:
+                y = torch.zeros(n, dtype=torch.long, device=DEVICE); cond = None
             t = torch.rand(n, device=DEVICE); eps = torch.randn_like(x)
             xt = (1 - t)[:, None, None, None] * x + t[:, None, None, None] * eps
             inp = xt if cond is None else torch.cat([xt, cond], 1)
@@ -201,7 +210,16 @@ def main():
             with torch.no_grad():
                 for pe, pm in zip(ema.parameters(), model.parameters()): pe.mul_(0.999).add_(pm, alpha=0.001)
         if ep % 20 == 19 or ep == args.epochs - 1:
-            if args.mode == "sparse":
+            if args.mode == "all":                                   # score the ONE model on all three tasks
+                Z = torch.zeros(256, C, R, R, device=DEVICE); ynull = torch.full((256,), ncls, dtype=torch.long, device=DEVICE)
+                gu = sample(ema, 256, C, R, y=ynull, cond=Z)                                          # unconditional
+                gp = sample(ema, 256, C, R, y=torch.randint(0, ncls, (256,), device=DEVICE), cond=Z, ncls=ncls, cfg=args.cfg)  # param + CFG
+                idx = torch.randperm(len(tr))[:256]; xv = torch.from_numpy(np.stack([tr[int(i)][0].numpy() for i in idx])).to(DEVICE)
+                gs = sample(ema, 256, C, R, y=ynull, cond=fae_dense(fae, xv, fc, ssub))               # sparse recon
+                rel = (torch.linalg.norm((gs - xv).flatten(1), dim=1) / torch.linalg.norm(xv.flatten(1), dim=1).clamp_min(1e-6)).mean().item()
+                print(f"  ep {ep+1:3d}/{args.epochs}  loss={loss.item():.4f}  uncond_sd={spectrum_dist(gu, real):.4f}  "
+                      f"param_sd={spectrum_dist(gp, real):.4f}  sparse_relL2={rel:.4f}", flush=True)
+            elif args.mode == "sparse":
                 idx = torch.randperm(len(tr))[:256]
                 xv = torch.from_numpy(np.stack([tr[int(i)][0].numpy() for i in idx])).to(DEVICE)
                 cond = fae_dense(fae, xv, fc, ssub); g = sample(ema, xv.size(0), C, R, cond=cond)
