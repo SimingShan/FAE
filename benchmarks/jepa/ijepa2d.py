@@ -1,8 +1,11 @@
 """Single-frame 2D I-JEPA baseline.
 
-I-JEPA (Assran et al. 2023) was designed for single images — this is the 2D
-counterpart of our faithful 1D port (`src/models/jepa_vit.py`), for the
-single-frame physics experiment. (The spatio-temporal JEPA is the helenqu
+ORIGINAL GITHUB REPO: https://github.com/facebookresearch/ijepa   (Assran et al., CVPR 2023)
+Architecture/recipe follow that repo (`src/models/vision_transformer.py`, masking + EMA target);
+re-implemented here for 2D patches.
+
+I-JEPA was designed for single images — this is the 2D counterpart of our faithful 1D port
+(`src/models/jepa_vit.py`), for the single-frame physics experiment. (The spatio-temporal JEPA is the helenqu
 3D-conv model in `external/`, which downsamples time with Conv3d — a different
 regime; this one is the original image-I-JEPA recipe.)
 

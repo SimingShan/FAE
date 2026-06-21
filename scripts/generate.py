@@ -1,5 +1,11 @@
 """REPA generation — ONE of the two evaluation categories (the other is eval_probe.py).
 
+BUILT ON (vendored in external/REPA, imported as `models.sit`):
+  REPA — https://github.com/sihyun-yu/REPA   (Yu et al., 2024; representation alignment for generation)
+  SiT  — https://github.com/willisma/SiT     (Ma et al., 2024; the diffusion-transformer backbone)
+The SiT model is theirs; the PDE modes (uncond/param/sparse), the alignment targets, and the data
+wiring below are ours.
+
 Pixel-space SiT flow-matching on PDE fields (NO VAE). Representation alignment (REPA): cosine-align the
 SiT's intermediate tokens to a frozen encoder's per-patch features.
 

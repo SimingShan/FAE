@@ -1,8 +1,9 @@
 """MAE (and AE) baseline — clean, faithful port of Kaiming He's MAE.
 
-Source: facebookresearch/mae `models_mae.py` + `util/pos_embed.py`
-(cloned to external/mae). The masking, encoder, decoder, and patch-MSE loss
-are unchanged from the original. Only three things are adapted:
+ORIGINAL GITHUB REPO: https://github.com/facebookresearch/mae   (He et al., CVPR 2022)
+Ported from that repo's `models_mae.py` + `util/pos_embed.py` (cloned to external/mae).
+The masking, encoder, decoder, and patch-MSE loss are unchanged from the original.
+Only three things are adapted:
 
   1. `in_chans` is generalized (the original hard-codes 3) so it runs on our
      4-channel physics fields (pressure, tracer/density, v_x, v_y).
