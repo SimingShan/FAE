@@ -254,6 +254,33 @@ class SenseiverDecoder(nn.Module):
 # Learned multi-query readout (optional)
 # ----------------------------------------------------------------------
 # ----------------------------------------------------------------------
+# Latent predictor (delta-t conditioned token flow; used by train_fae.py predict/twoview)
+# ----------------------------------------------------------------------
+class TokenPredictor(nn.Module):
+    """Delta-t-conditioned set->set predictor over the M latent tokens — a learned latent FLOW
+    L_t -> L_{t+d} (an approximate evolution operator). Conditioning on the continuous gap d makes
+    the model functional in time too, and starves trivial collapse (one fixed gap is too easy)."""
+    def __init__(self, dim, depth=2, heads=8, dropout=0.0, dt_freq=16):
+        super().__init__()
+        self.dt_freq = dt_freq
+        self.dt_mlp = nn.Sequential(nn.Linear(2 * dt_freq, dim), nn.GELU(), nn.Linear(dim, dim))
+        self.layers = nn.ModuleList([SelfLayer(dim, heads, dropout) for _ in range(depth)])
+        self.norm = nn.LayerNorm(dim)
+        self.head = nn.Linear(dim, dim)
+
+    def _dt_embed(self, dt):                                   # dt: (B,) in [0, 1]
+        f = torch.arange(1, self.dt_freq + 1, device=dt.device, dtype=dt.dtype)
+        a = dt[:, None] * f[None, :] * math.pi
+        return self.dt_mlp(torch.cat([torch.sin(a), torch.cos(a)], dim=-1))    # (B, dim)
+
+    def forward(self, x, dt):                                  # x (B,M,D), dt (B,)
+        x = x + self._dt_embed(dt).unsqueeze(1)                # condition every token on delta
+        for layer in self.layers:
+            x = layer(x)
+        return self.head(self.norm(x))
+
+
+# ----------------------------------------------------------------------
 # Full autoencoder
 # ----------------------------------------------------------------------
 class FAE(nn.Module):

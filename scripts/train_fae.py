@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np, torch, torch.nn as nn, torch.nn.functional as F
 from torch.utils.data import DataLoader
 from src.models import FAE
-from src.models.fjepa import TokenPredictor
+from src.models.fae import TokenPredictor
 from src.data.well2d import ShearFlowClipDataset, make_coords_2d, fields_to_tokens
 from src.metrics import lin_probe
 
