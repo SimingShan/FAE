@@ -53,9 +53,10 @@ Verify with `python benchmarks/smoke_test.py`.
   (`src/models/jepa_vit.py`), extended to 2D. `encoder=5.0M` (parity).
 
 ```python
-from benchmarks.jepa.ijepa2d import ijepa2d_physics, sample_masks
+from benchmarks.jepa.ijepa2d import ijepa2d_physics, sample_block_masks
 m = ijepa2d_physics()
-ctx, tgt = sample_masks(B, m.num_patches, n_ctx=40, n_tgt=12, device)
+g = m.encoder.patch_embed.grid
+ctx, tgt = sample_block_masks(B, g, g, device=device)   # multi-block masking (Assran et al.)
 pred, target = m(imgs, ctx, tgt)         # smooth_l1_loss(pred, target)
 m.update_target(tau)                     # per-iter EMA
 z = m.encode(imgs)                       # frozen probe representation

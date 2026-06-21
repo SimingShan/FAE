@@ -45,15 +45,16 @@ def main():
     print("  backward OK")
 
     print("=== 2D I-JEPA (single-frame) ===")
-    from benchmarks.jepa.ijepa2d import ijepa2d_physics, sample_masks
+    from benchmarks.jepa.ijepa2d import ijepa2d_physics, sample_block_masks
     import torch.nn.functional as F
     j = ijepa2d_physics()
     ne = sum(p.numel() for p in j.encoder.parameters())/1e6
     print(f"  encoder={ne:.2f}M  predictor={sum(p.numel() for p in j.predictor.parameters())/1e6:.2f}M  patches={j.num_patches}")
     ok &= 4.0 < ne < 8.0
-    ctx, tgt = sample_masks(2, j.num_patches, 40, 12, "cpu")
+    g = j.encoder.patch_embed.grid                       # multi-block masking (Assran et al.)
+    ctx, tgt = sample_block_masks(2, g, g, device="cpu")
     pred, h = j(x, ctx, tgt)
-    print(f"  pred={tuple(pred.shape)} target={tuple(h.shape)} (expect (2,12,256))")
+    print(f"  pred={tuple(pred.shape)} target={tuple(h.shape)}  (block masking)")
     ok &= pred.shape == h.shape == (2, 12, 256)
     lossJ = F.smooth_l1_loss(pred, h); lossJ.backward()
     b = j.target.blocks[0].mlp.fc1.weight.clone(); j.update_target(0.99)
