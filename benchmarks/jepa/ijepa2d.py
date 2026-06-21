@@ -9,7 +9,13 @@ I-JEPA was designed for single images — this is the 2D counterpart of our fait
 3D-conv model in `external/`, which downsamples time with Conv3d — a different
 regime; this one is the original image-I-JEPA recipe.)
 
-Recipe (unchanged from the original / our 1D port):
+NOTE: this is a clean from-scratch RE-IMPLEMENTATION (not the original code), with the encoder
+param-matched to ~7M / ViT-Tiny (Hard-Rule #4). The I-JEPA *recipe* is reproduced faithfully — in
+particular the multi-block masking hyperparameters in `sample_block_masks` match Assran et al. exactly
+(4 target blocks scale 0.15-0.2 aspect 0.75-1.5; 1 context block scale 0.85-1.0 minus targets), and the
+trainer (`train_baseline.py`) uses that, not a random split.
+
+Recipe:
   - ViT encoder over 2D patches, fixed 2D sin-cos pos-embed.
   - Target encoder = EMA copy; sees the FULL image, target features are taken
     at the target patches and LayerNorm'd.
@@ -44,12 +50,6 @@ class PatchEmbed2D(nn.Module):
 def apply_masks(x, idx):
     """x: (B, P, D), idx: (B, K) -> (B, K, D)."""
     return torch.gather(x, 1, idx.unsqueeze(-1).expand(-1, -1, x.size(-1)))
-
-
-def sample_masks(batch, num_patches, n_ctx, n_tgt, device):
-    """Disjoint random context + target patch indices per item (simplified — kept for ref)."""
-    perm = torch.rand(batch, num_patches, device=device).argsort(dim=1)
-    return perm[:, :n_ctx], perm[:, n_ctx:n_ctx + n_tgt]
 
 
 def _block(gh, gw, smin, smax, armin, armax, device):
