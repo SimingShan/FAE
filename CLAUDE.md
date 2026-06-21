@@ -12,7 +12,9 @@ comparison are the same in both categories:
 | **FAE** (ours) | functional / coordinate, dual-view temporal | `src/models/fae.py`, `scripts/train_fae.py` (`--mode twoview` default) |
 | **MAE** | masked reconstruction | `benchmarks/mae/mae.py` (Kaiming port), `scripts/train_baseline.py` |
 | **JEPA** (I-JEPA) | latent prediction | `benchmarks/jepa/ijepa2d.py`, `scripts/train_baseline.py` |
-| **VICReg** | invariance (their SSLForPDEs) | `scripts/train_baseline.py` |
+| **VICReg** (their SSLForPDEs) | invariance | *probe-only baseline, archived* `arxiv/pre_repa_pivot/scripts/train_vicreg_fpo.py` — wire back if needed for generation |
+
+Generation benchmarks (`--align mae/jepa`) = MAE + JEPA only; both built/trained via `scripts/train_baseline.py` (`--method {mae,ijepa}`).
 
 ### Category 1 — REPA generation  (`scripts/generate.py`)
 Pixel-space SiT flow-matching on PDE fields, **NO VAE**; REPA aligns SiT tokens to a frozen encoder's
