@@ -253,7 +253,7 @@ class SenseiverDecoder(nn.Module):
         self.cross_layer = CrossLayer(dec_dim, emb_dim_in, num_heads, dropout)
         self.head = nn.Linear(dec_dim, out_chans)
 
-    def forward(self, latents, query_coords):
+    def forward(self, latents, query_coords, return_feats=False):
         if query_coords.dim() == 2:
             query_coords = query_coords.unsqueeze(0).expand(latents.size(0), -1, -1)
         B, N_q = query_coords.shape[:2]
@@ -263,7 +263,7 @@ class SenseiverDecoder(nn.Module):
         q = torch.cat([cf, ob], dim=-1)
         q = self.query_proj(q)
         q = self.cross_layer(q, latents)
-        return self.head(q)
+        return q if return_feats else self.head(q)   # q = per-query feature (REPA alignment target)
 
 
 class CViTBlock(nn.Module):

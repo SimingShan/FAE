@@ -120,8 +120,8 @@ def main():
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--tag", default="v1")
-    ap.add_argument("--dataset", choices=["shear", "flowbench"], default="shear")
-    ap.add_argument("--in_chans", type=int, default=None, help="default 4 (shear) / 3 (flowbench)")
+    ap.add_argument("--dataset", choices=["shear", "flowbench", "ns"], default="shear")
+    ap.add_argument("--in_chans", type=int, default=None, help="default 4 (shear) / 3 (flowbench,ns)")
     ap.add_argument("--norm_pix", action="store_true", help="MAE per-patch normalized target (Kaiming best)")
     args = ap.parse_args()
     torch.manual_seed(args.seed); np.random.seed(args.seed)
@@ -132,8 +132,14 @@ def main():
     print(f"=== {args.method.upper()} shear_flow [{args.tag}]  res={args.resolution} batch={args.batch} "
           f"epochs={args.epochs} lr={lr:.1e} wd={wd} amp={args.amp} ===", flush=True)
 
-    in_chans = args.in_chans if args.in_chans is not None else (3 if args.dataset == "flowbench" else 4)
-    if args.dataset == "flowbench":
+    in_chans = args.in_chans if args.in_chans is not None else (3 if args.dataset in ("flowbench", "ns") else 4)
+    if args.dataset == "ns":
+        from src.data.ns import NSDataset
+        PARAMS[:] = ["buoyancy"]
+        mode = "clip" if args.method in ("videomae", "stjepa") else "single"
+        tr = NSDataset("train", side=args.resolution, mode=mode, clip_len=max(args.n_frames, 2), frame_stride=4, n_traj=12)
+        va = NSDataset("valid", side=args.resolution, mode=mode, clip_len=max(args.n_frames, 2), frame_stride=4, n_traj=12, stats=tr.stats)
+    elif args.dataset == "flowbench":
         from src.data.flowbench import FlowBenchFPO
         PARAMS[:] = ["Strouhal"]
         mode = "clip" if args.method in ("videomae", "stjepa") else "snapshot"

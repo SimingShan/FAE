@@ -89,13 +89,13 @@ def probe2(Ztr, Ytr, Zva, Yva):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--mode", default="predict", choices=[
+    ap.add_argument("--mode", default="twoview", choices=[   # DEFAULT: dual-view temporal
         "recon",          # A: present recon only
         "predict",        # B: future-field recon via predictor
         "predict_vicreg", # C: B + VICReg (deprecated — hurts)
         "recon_both",     # 3: present recon (anchor to x_t) + future-field recon (dynamics)
         "siam",           # 4: recon_both + latent-match to a diff-sparsity future view (no VICReg)
-        "twoview"])       # 4': recon_both with two present views sharing the SAME recon targets
+        "twoview"])       # 4' DEFAULT: dual-view (two present sparsities, shared recon targets) + temporal predict
     ap.add_argument("--lam_match", type=float, default=1.0, help="weight on siam latent-match term")
     ap.add_argument("--epochs", type=int, default=80)
     ap.add_argument("--batch", type=int, default=128)
@@ -121,7 +121,7 @@ def main():
     ap.add_argument("--resolution", type=int, default=224)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--tag", default="faep")
-    ap.add_argument("--save", action="store_true")
+    ap.add_argument("--save", action=argparse.BooleanOptionalAction, default=True)  # saves by default; --no-save to skip
     ap.add_argument("--dataset", choices=["shear", "flowbench", "ns"], default="shear")
     ap.add_argument("--in_chans", type=int, default=None, help="default 4 (shear) / 3 (flowbench,ns)")
     ap.add_argument("--norm_target", action="store_true", help="per-sample per-channel amplitude-stripped recon target")

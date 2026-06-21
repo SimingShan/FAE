@@ -77,32 +77,58 @@ def train(model, trajs, kind, epochs=400, lr=3e-4):
 
 @torch.no_grad()
 def rollout(model, traj, kind, H=20):
+    """relative L2 error per step:  ||pred - truth|| / ||truth||  (1.0 = mean-prediction level)."""
     x0 = traj[0:1].to(DEVICE); err = []
-    if kind == "unet":
-        x = x0
-        for k in range(1, H + 1):
-            x = model(x); err.append(F.mse_loss(x, traj[k:k + 1].to(DEVICE)).item())
-    else:
-        z = model.encode(x0)
-        for k in range(1, H + 1):
-            z = model.step(z); err.append(F.mse_loss(model.decode(z), traj[k:k + 1].to(DEVICE)).item())
+    x = x0; z = model.encode(x0) if kind != "unet" else None
+    for k in range(1, H + 1):
+        if kind == "unet":
+            x = model(x); pred = x
+        else:
+            z = model.step(z); pred = model.decode(z)
+        gt = traj[k:k + 1].to(DEVICE)
+        err.append((torch.linalg.norm(pred - gt) / torch.linalg.norm(gt)).item())
     return np.array(err)
+
+
+@torch.no_grad()
+def make_plot(models, traj, out, hor=(1, 5, 10, 20)):
+    import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
+    x0 = traj[0:1].to(DEVICE); H = max(hor)
+    pu, pl = {}, {}; x = x0.clone(); z = models["latent"].encode(x0)
+    for k in range(1, H + 1):
+        x = models["unet"](x); z = models["latent"].step(z)
+        if k in hor:
+            pu[k] = x[0, 0].cpu(); pl[k] = models["latent"].decode(z)[0, 0].cpu()
+    rows = [("ground truth", {k: traj[k, 0].cpu() for k in hor}),
+            ("direct (UNet)", pu), ("latent", pl)]
+    fig, ax = plt.subplots(3, len(hor), figsize=(2.6 * len(hor), 7.6))
+    for r, (name, d) in enumerate(rows):
+        for j, k in enumerate(hor):
+            v = max(abs(float(traj[k, 0].min())), abs(float(traj[k, 0].max())))
+            ax[r, j].imshow(d[k], cmap="RdBu_r", vmin=-v, vmax=v); ax[r, j].set_xticks([]); ax[r, j].set_yticks([])
+            if r == 0: ax[r, j].set_title(f"t+{k}", fontsize=11)
+        ax[r, 0].set_ylabel(name, fontsize=11)
+    fig.suptitle("rollout prediction (tracer) — direct diverges, latent stays coherent", fontsize=12)
+    fig.tight_layout(); fig.savefig(out, dpi=110); plt.close(fig); print("saved", out)
 
 
 def main():
     data = load_trajs(12)
-    eval_trajs = data[-3:]                                          # held-out ICs
+    eval_trajs = data[-3:]; PLOT_N = 4; keep = {}                   # held-out ICs; keep N=4 models for the plot
     print(f"loaded {len(data)} trajectories, {T} frames each, {SIDE}x{SIDE}")
-    print(f"{'N_traj':7} {'method':7} | rollout MSE @ horizon 1 / 5 / 10 / 20")
+    print(f"{'N_traj':7} {'method':7} | rollout REL-L2 @ horizon 1 / 5 / 10 / 20")
     for N in (1, 2, 4, 8):
         train_trajs = [data[i] for i in range(N)]
         for kind, Mk in (("unet", UNet), ("latent", Latent)):
             torch.manual_seed(0); m = Mk().to(DEVICE)
             np_ = sum(p.numel() for p in m.parameters()) / 1e6
             train(m, train_trajs, kind)
+            if N == PLOT_N: keep[kind] = m
             E = np.mean([rollout(m, t, kind) for t in eval_trajs], 0)   # avg over eval trajectories
             print(f"  {N:<5} {kind:7} | {E[0]:.3f} / {E[4]:.3f} / {E[9]:.3f} / {E[19]:.3f}   ({np_:.2f}M)", flush=True)
-    print("=> if latent stays lower at small N / long horizon => latent rollout is more data-efficient + stable.")
+    os.makedirs("results/plots", exist_ok=True)
+    make_plot(keep, eval_trajs[0], f"results/plots/rollout_pred_N{PLOT_N}.png")
+    print("=> REL-L2: 1.0 = mean-prediction level. direct >1 = diverged; latent ~1 = saturated (stable).")
 
 
 if __name__ == "__main__":

@@ -86,6 +86,7 @@ def main():
     ap.add_argument("--fae_ckpt", default="results/checkpoints/g1/faep_twoview_fae_ns_tw.pt")
     ap.add_argument("--tag", default="r")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--save", action="store_true")
     args = ap.parse_args()
     set_seed(args.seed)
     print(f"=== rollout NS  mode={args.mode}  n_traj/file={args.n_traj_per_file}  lr={args.lr}  ep={args.epochs}  seed={args.seed} ===", flush=True)
@@ -134,6 +135,11 @@ def main():
                 vtot += F.mse_loss(net(x, t, z, ea), y).item() * x.size(0); vn += x.size(0)
         print(f"  ep {ep+1:2d}/{args.epochs}  train_mse={tot/n:.4e}  val_one-step_MSE(x1e3)={1e3*vtot/vn:.3f}", flush=True)
     print(f"DONE mode={args.mode}  final val one-step MSE x1e3 = {1e3*vtot/vn:.3f}", flush=True)
+    if args.save:
+        out = f"results/checkpoints/g1/rollout_ns_{args.mode}_s{args.seed}.pt"; os.makedirs(os.path.dirname(out), exist_ok=True)
+        ck = {"net": net.state_dict(), "stats": tr.stats, "mode": args.mode, "args": vars(args)}
+        if rep_mlp is not None: ck["rep_mlp"] = rep_mlp.state_dict()
+        torch.save(ck, out); print(f"  saved {out}", flush=True)
 
 
 if __name__ == "__main__":

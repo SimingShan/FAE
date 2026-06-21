@@ -54,7 +54,7 @@ def channel_stats(ds):
 def load_fae(ckpt_path):
     ck = torch.load(ckpt_path, map_location=DEVICE)
     a = ck["train_args"]; R = a["resolution"]; NPIX = R * R
-    inc = a.get("in_chans") or (3 if a.get("dataset") == "ns" else 4)
+    inc = a.get("in_chans") or (3 if a.get("dataset") in ("ns", "flowbench") else 4)
     model = FAE(emb_dim=a["emb_dim"], num_iter=a["num_iter"], depth_per_iter=4,
                 num_latents=a["num_latents"], num_cross_heads=4, num_self_heads=8,
                 n_freq=32, max_freq=32, coord_dim=2, in_chans=inc,

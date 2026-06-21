@@ -32,15 +32,12 @@ def render(fae, mae, fm, fs, mm, ms, coords, R, xt, title, out):
         tok = fae.encode_tokens(fields_to_tokens(xt, iA), coords[iA])
         rec_o = (fae.decoder(tok, coords)[0].permute(1, 0).reshape(4, R, R).unsqueeze(0)) * fs + fm
         xt_mae = (phys - mm) / ms; torch.manual_seed(0)
-        _, pred, mask = mae(xt_mae, mask_ratio=0.75)
-        tgt = mae.patchify(xt_mae)
-        rec_m = mae.unpatchify(tgt * (1 - mask).unsqueeze(-1) + pred * mask.unsqueeze(-1)) * ms + mm
+        _, pred, _ = mae(xt_mae, mask_ratio=0.0)           # FULL field in -> decoder reconstruction
+        rec_m = mae.unpatchify(pred) * ms + mm
     rec_o_n = (rec_o - fm) / fs; rec_m_n = (rec_m - mm) / ms; xt_mae = (phys - mm) / ms
-    p = mae.patch_embed.patch_size[0]; grid = R // p
-    vis = (mask[0] == 0).nonzero().flatten().tolist()
     srow = (iA // R).numpy(); scol = (iA % R).numpy()
     rows = [("ground truth", phys, None),
-            ("MAE recon (75% masked)", rec_m, mse(rec_m_n, xt_mae)),
+            ("MAE recon (full field in)", rec_m, mse(rec_m_n, xt_mae)),
             ("ours recon (%d sensors)" % N_SENS, rec_o, mse(rec_o_n, xt))]
     fig, ax = plt.subplots(3, 4, figsize=(13, 9.2))
     for r, (name, field, e) in enumerate(rows):
@@ -49,11 +46,7 @@ def render(fae, mae, fm, fs, mm, ms, coords, R, xt, title, out):
             v = max(abs(float(gt.min())), abs(float(gt.max())), 1.5 * float(fs[0, c, 0, 0]))  # clamp >=1.5x global std -> flat fields render flat
             ax[r, c].imshow(field[0, c], cmap="RdBu_r", vmin=-v, vmax=v); ax[r, c].set_xticks([]); ax[r, c].set_yticks([])
             if r == 0: ax[r, c].set_title(CH[c], fontsize=11)
-            if r == 1:
-                for pi in vis:
-                    ax[r, c].add_patch(mpatches.Rectangle(((pi % grid) * p - .5, (pi // grid) * p - .5),
-                                                          p, p, fill=False, edgecolor="lime", lw=0.7))
-            if r == 2:
+            if r == 2:                                      # ours: green dots = the 512 sensors it sees
                 ax[r, c].scatter(scol, srow, s=1.5, c="lime", marker=".", linewidths=0)
         lbl = name + (f"\n(MSE={e:.3f})" if e is not None else "")
         ax[r, 0].set_ylabel(lbl, fontsize=10)
