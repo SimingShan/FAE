@@ -11,7 +11,7 @@ Components
 - ``FAEEncoder``      tokens = cross-attn(latents -> sensor tokens) + self-attn.
                       Senseiver-style weight sharing: a distinct first layer,
                       then one shared layer applied (num_iter - 1) times.
-- ``SenseiverDecoder``  single cross-attention readout; each query decoded
+- ``FAEDecoder``  single cross-attention readout; each query decoded
                         independently (resolution-free neural-operator decode).
 - ``FAE``               encoder + decoder;
                         forward: (u, in_coords, query_coords) -> (pred, tokens).
@@ -47,7 +47,7 @@ class Residual(nn.Module):
         return self.dropout(self.module(*args, **kwargs)) + args[0]
 
 
-class SenseiverMLP(nn.Module):
+class MLP(nn.Module):
     """LayerNorm -> Linear(D, D) -> GELU -> Linear(D, D). No expansion."""
     def __init__(self, dim: int):
         super().__init__()
@@ -96,7 +96,7 @@ class CrossLayer(nn.Module):
     def __init__(self, dim_q, dim_kv, num_heads, dropout=0.0):
         super().__init__()
         self.cross = Residual(CrossAttention(dim_q, dim_kv, num_heads, dropout), dropout)
-        self.mlp   = Residual(SenseiverMLP(dim_q), dropout)
+        self.mlp   = Residual(MLP(dim_q), dropout)
 
     def forward(self, q, kv):
         q = self.cross(q, kv)
@@ -109,7 +109,7 @@ class SelfLayer(nn.Module):
     def __init__(self, dim, num_heads, dropout=0.0):
         super().__init__()
         self.attn = Residual(SelfAttention(dim, num_heads, dropout), dropout)
-        self.mlp  = Residual(SenseiverMLP(dim), dropout)
+        self.mlp  = Residual(MLP(dim), dropout)
 
     def forward(self, x):
         x = self.attn(x)
@@ -132,11 +132,6 @@ def fourier_features(coords, n_freq, max_freq=32):
     sins = torch.sin(args).flatten(-2)
     coss = torch.cos(args).flatten(-2)
     return torch.cat([sins, coss], dim=-1)
-
-
-# Backward-compat aliases (older scripts/notebooks).
-_fourier_features_linear = fourier_features
-_fourier_features_2d_linear = fourier_features
 
 
 # ----------------------------------------------------------------------
@@ -215,7 +210,7 @@ class FAEEncoder(nn.Module):
 # ----------------------------------------------------------------------
 # Decoders
 # ----------------------------------------------------------------------
-class SenseiverDecoder(nn.Module):
+class FAEDecoder(nn.Module):
     """Single cross-attention readout at arbitrary query coordinates.
 
     Query = proj(concat[fourier(x_q), learned output buffer]); one CrossLayer
@@ -284,7 +279,7 @@ class TokenPredictor(nn.Module):
 # Full autoencoder
 # ----------------------------------------------------------------------
 class FAE(nn.Module):
-    """Function AutoEncoder: FAEEncoder + SenseiverDecoder.
+    """Function AutoEncoder: FAEEncoder + FAEDecoder.
 
     forward: (u, in_coords, query_coords) -> (pred, tokens)
       u            (B, N, 1)      sensor values
@@ -307,7 +302,7 @@ class FAE(nn.Module):
             num_latents=num_latents, dropout=dropout,
             coord_dim=coord_dim,
             in_chans=in_chans)
-        self.decoder = SenseiverDecoder(
+        self.decoder = FAEDecoder(
             emb_dim_in=emb_dim, dec_dim=emb_dim,
             n_freq=dec_n_freq, max_freq=dec_max_freq,
             num_heads=dec_num_heads, dropout=dropout,
