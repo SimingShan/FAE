@@ -120,15 +120,18 @@ class SelfLayer(nn.Module):
 # ----------------------------------------------------------------------
 # Coordinate features
 # ----------------------------------------------------------------------
-def fourier_features(coords, n_freq, max_freq=32):
+def fourier_features(coords, n_freq, max_freq=32, geometric=False):
     """Linear-spaced (Nyquist-capped) sin/cos features.
 
     coords: (..., D) in [0, 1] -> (..., 2 * D * n_freq).
     """
     device = coords.device
-    freqs = torch.linspace(1.0, float(max_freq) / 2.0, n_freq,
-                            device=device, dtype=torch.float32)
-    args = coords.unsqueeze(-1) * freqs * math.pi
+    if geometric:                        # octave/NeRF spacing: broad band, highest ~max_freq cycles/domain
+        freqs = 2.0 ** torch.linspace(0.0, math.log2(float(max_freq)), n_freq, device=device, dtype=torch.float32)
+        args = coords.unsqueeze(-1) * freqs * (2.0 * math.pi)
+    else:                                # legacy linear spacing (band-limited ~max_freq/4 cycles)
+        freqs = torch.linspace(1.0, float(max_freq) / 2.0, n_freq, device=device, dtype=torch.float32)
+        args = coords.unsqueeze(-1) * freqs * math.pi
     sins = torch.sin(args).flatten(-2)
     coss = torch.cos(args).flatten(-2)
     return torch.cat([sins, coss], dim=-1)
@@ -167,13 +170,14 @@ class FAEEncoder(nn.Module):
     def __init__(self, emb_dim=320, num_iter=4, depth_per_iter=4,
                   num_cross_heads=4, num_self_heads=8,
                   n_freq=32, max_freq=32, val_dim=32,
-                  num_latents=128, dropout=0.0, coord_dim=2, in_chans=1):
+                  num_latents=128, dropout=0.0, coord_dim=2, in_chans=1, fourier_geometric=False):
         super().__init__()
         self.num_iter = num_iter
         self.n_freq = n_freq
         self.max_freq = max_freq
         self.coord_dim = coord_dim
         self.in_chans = in_chans
+        self.fgeo = fourier_geometric
 
         coord_feat_dim = 2 * coord_dim * n_freq
         self.coord_proj = nn.Linear(coord_feat_dim, emb_dim - val_dim)
@@ -195,7 +199,7 @@ class FAEEncoder(nn.Module):
         """u: (B, N, 1), coords: (N, D) or (B, N, D) -> tokens (B, M, emb_dim)."""
         if coords.dim() == 2:
             coords = coords.unsqueeze(0).expand(u.size(0), -1, -1)
-        cf = fourier_features(coords, self.n_freq, self.max_freq)
+        cf = fourier_features(coords, self.n_freq, self.max_freq, self.fgeo)
         c = self.coord_proj(cf)
         v = self.val_proj(u)
         tokens = torch.cat([c, v], dim=-1)
@@ -217,11 +221,12 @@ class FAEDecoder(nn.Module):
     against the latent tokens; linear head (no terminal LayerNorm).
     """
     def __init__(self, emb_dim_in=320, dec_dim=320, n_freq=32, max_freq=32,
-                  num_heads=4, dropout=0.0, latent_size=1, coord_dim=2, out_chans=1):
+                  num_heads=4, dropout=0.0, latent_size=1, coord_dim=2, out_chans=1, fourier_geometric=False):
         super().__init__()
         self.n_freq = n_freq
         self.max_freq = max_freq
         self.coord_dim = coord_dim
+        self.fgeo = fourier_geometric
 
         self.output_buffer = nn.Parameter(torch.empty(latent_size, dec_dim))
         with torch.no_grad():
@@ -237,7 +242,7 @@ class FAEDecoder(nn.Module):
             query_coords = query_coords.unsqueeze(0).expand(latents.size(0), -1, -1)
         B, N_q = query_coords.shape[:2]
 
-        cf = fourier_features(query_coords, self.n_freq, self.max_freq)
+        cf = fourier_features(query_coords, self.n_freq, self.max_freq, self.fgeo)
         ob = self.output_buffer.unsqueeze(0).expand(B, N_q, -1)
         q = torch.cat([cf, ob], dim=-1)
         q = self.query_proj(q)
@@ -293,7 +298,7 @@ class FAE(nn.Module):
                   n_freq=32, max_freq=32, val_dim=32,
                   dec_n_freq=32, dec_max_freq=32, dec_num_heads=4,
                   num_latents=128, dropout=0.0, coord_dim=2,
-                  in_chans=1):
+                  in_chans=1, fourier_geometric=False):
         super().__init__()
         self.encoder = FAEEncoder(
             emb_dim=emb_dim, num_iter=num_iter, depth_per_iter=depth_per_iter,
@@ -301,12 +306,12 @@ class FAE(nn.Module):
             n_freq=n_freq, max_freq=max_freq, val_dim=val_dim,
             num_latents=num_latents, dropout=dropout,
             coord_dim=coord_dim,
-            in_chans=in_chans)
+            in_chans=in_chans, fourier_geometric=fourier_geometric)
         self.decoder = FAEDecoder(
             emb_dim_in=emb_dim, dec_dim=emb_dim,
             n_freq=dec_n_freq, max_freq=dec_max_freq,
             num_heads=dec_num_heads, dropout=dropout,
-            latent_size=1, coord_dim=coord_dim, out_chans=in_chans)
+            latent_size=1, coord_dim=coord_dim, out_chans=in_chans, fourier_geometric=fourier_geometric)
         self.emb_dim = emb_dim
         self.num_latents = num_latents
         self.coord_dim = coord_dim

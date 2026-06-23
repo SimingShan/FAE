@@ -164,8 +164,9 @@ class IJEPA2D(nn.Module):
         return self.target(imgs).mean(dim=1)            # (B, embed_dim)
 
 
-def ijepa2d_physics(img_size=128, in_chans=4, patch_size=16, **kw):
-    """~7M params (encoder) parity, single-frame 2D I-JEPA."""
+def ijepa2d_physics(img_size=128, in_chans=4, patch_size=16, embed_dim=256, depth=6, num_heads=8, **kw):
+    """~7M params (encoder) parity, single-frame 2D I-JEPA. embed_dim/depth/patch_size overridable
+    for the capacity-matched REPA comparison (embed_dim=320, patch=4)."""
     return IJEPA2D(img_size=img_size, patch_size=patch_size, in_chans=in_chans,
-                    embed_dim=256, depth=6, num_heads=8,
+                    embed_dim=embed_dim, depth=depth, num_heads=num_heads,
                     pred_dim=128, pred_depth=4, pred_heads=4, **kw)

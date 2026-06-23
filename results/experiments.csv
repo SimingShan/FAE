@@ -1,0 +1,31 @@
+tier,date,category,name,dataset,res,objective,emb_dim,patch,lam,epochs,seeds,n_samples,metric,value,std,floor,ckpt,job,status,notes
+HEADLINE,2026-06-23,probe,recon-FAE-FAIR,ns,64,reconstruction,320,,,100,1,3952,R2_buoy,PENDING,,-0.427,faep_recon_fae_ns_r64fair,2027533,running,FAIR match R64/100ep/single-frame (job 2027533); replaces the confounded R224 run
+HEADLINE,2026-06-22,probe,MAE,ns,64,masked-recon,320,4,,100,1,3952,R2_buoy,0.527,,-0.427,mae_shear_ns320p4_s0,2024662,valid,matched 320/p4
+HEADLINE,2026-06-22,probe,JEPA,ns,64,latent-predict,320,4,,100,1,3952,R2_buoy,0.505,,-0.427,ijepa_shear_ns320p4_s0,2024663,valid,matched 320/p4
+HEADLINE,2026-06-22,probe,FAE-DINO,ns,64,ema-distill,320,,,100,1,3952,R2_buoy,0.244,,-0.427,faep_dino_ns_hybrid,2022672,valid,recon-anchored distillation
+HEADLINE,2026-06-22,probe,FJEPA,ns,64,no-recon-latent-vicreg,320,,,100,1,3952,R2_buoy,0.010,,-0.427,fjepa_vicreg_ns_v1,2024589,valid,no-recon fails (at floor)
+HEADLINE,2026-06-22,probe,FLOOR,ns,64,trivial,,,,,,3952,R2_buoy,-0.427,,,,,valid,channel mean+std baseline
+,,,,,,,,,,,,,,,,,,,,
+valid,2026-06-23,gen_uncond,none-pixel,ns,64,none,,4,,60,3,2048,spectrum_dist,0.253,0.027,,,,valid,matched 3-seed; lam=0.5 UNDER AUDIT (lam sweep running)
+valid,2026-06-23,gen_uncond,mae,ns,64,mae,320,4,0.5,60,3,2048,spectrum_dist,0.248,0.012,,,,valid,lam=0.5 under audit
+valid,2026-06-23,gen_uncond,jepa,ns,64,jepa,320,4,0.5,60,3,2048,spectrum_dist,0.273,0.010,,,,valid,lam=0.5 under audit
+valid,2026-06-23,gen_uncond,fae,ns,64,fae,320,4,0.5,60,3,2048,spectrum_dist,0.276,0.005,,,,valid,worst @lam0.5 -> triggered lam audit + coord fix
+valid,2026-06-23,gen_uncond,none-pixel,ns,64,none,,4,,60,3,2048,FID,57.9,1.2,,,,valid,torchvision-inception; ranking only
+valid,2026-06-23,gen_uncond,mae,ns,64,mae,320,4,0.5,60,3,2048,FID,56.1,5.1,,,,valid,one lucky seed (s2=49)
+valid,2026-06-23,gen_uncond,fae,ns,64,fae,320,4,0.5,60,3,2048,FID,58.8,1.2,,,,valid,
+valid,2026-06-23,gen_uncond,jepa,ns,64,jepa,320,4,0.5,60,3,2048,FID,61.9,0.9,,,,valid,worst on both metrics
+valid,2026-06-23,ablation,anchored-nodisc,ns,64,reconstruction+anchor,320,,,80,1,3952,R2_buoy,0.711,,-0.427,anchored_fae_anc_nodisc,2025742,valid,2x2 ablation; anchoring +0.014 over vanilla (single-seed; may be noise)
+valid,2026-06-23,ablation,vanilla-nodisc,ns,64,reconstruction,320,,,80,1,3952,R2_buoy,0.697,,-0.427,anchored_fae_van_nodisc,2025744,valid,FAE recon-only
+valid,2026-06-23,ablation,anchored-disc,ns,64,recon+anchor+disc,320,,,80,1,3952,R2_buoy,0.308,,-0.427,anchored_fae_anc_disc,2025741,valid,disc-consistency FALSIFIED (variance collapse, per-anchor std 5.4->0.33)
+valid,2026-06-23,ablation,vanilla-disc,ns,64,recon+disc,320,,,80,1,3952,R2_buoy,0.042,,-0.427,anchored_fae_van_disc,2025743,valid,disc collapse near floor
+valid,2026-06-23,sparse_recon,anchored-nodisc,ns,64,reconstruction+anchor,320,,,80,1,2048,relL2_sensors,0.161,,,anchored_fae_anc_nodisc,,valid,best sparse recon @2048 sensors
+valid,2026-06-23,sparse_recon,vanilla-nodisc,ns,64,reconstruction,320,,,80,1,2048,relL2_sensors,0.172,,,anchored_fae_van_nodisc,,valid,
+valid,2026-06-23,probe,recon-FAE-r64-proxy,ns,64,reconstruction,320,,,80,1,3952,R2_buoy,0.697,,-0.427,anchored_fae_van_nodisc,2025744,valid,R64 single-frame recon (anchored trainer); current FAIR proxy until 2027533 lands
+,,,,,,,,,,,,,,,,,,,,
+WASTED,2026-06-22,probe,MAE-unmatched,ns,64,masked-recon,256,16,,,1,3952,R2_buoy,0.178,,-0.427,mae_shear_mae_ns_s0,,superseded,DID NOT CONTROL capacity/granularity; superseded by matched +0.527
+WASTED,2026-06-22,probe,JEPA-unmatched,ns,64,latent-predict,256,16,,,1,3952,R2_buoy,0.203,,-0.427,ijepa_shear_ijepa_ns_s0,,superseded,DID NOT CONTROL; superseded by matched +0.505
+WASTED,2026-06-21,probe,FAE-DINO-bugged,ns,64,ema-distill,320,,,100,1,3952,R2_buoy,-0.461,,-0.427,faep_dino_ns_hybrid,,INVALID,resolution bug (128 data vs 64 coords); corrected to +0.244
+WASTED,2026-06-22,gen_uncond,fae-singleseed,ns,64,fae,,,,,1,256,spectrum_dist,0.241,,,,INVALID,single-seed 256-sample noise; corrected to 0.276 (3-seed)
+WASTED,2026-06-22,probe,recon-FAE-R224,ns,224,reconstruction,320,,,200,1,3952,R2_buoy,0.684,,-0.427,faep_twoview_fae_ns_200ep,,CONFOUNDED,R224/200ep/twoview NOT matched to R64/100ep/single-frame baselines (3 confounds); replaced by 2027533
+WASTED,2026-06-22,probe,recon-FAE-R128tw,ns,128,reconstruction,320,,,100,1,3952,R2_buoy,0.661,,-0.427,faep_twoview_fae_ns_tw,,CONFOUNDED,R128/twoview; not res/protocol-matched
+WASTED,2026-06-22,probe,recon-FAE-R128grad,ns,128,reconstruction,320,,,100,1,3952,R2_buoy,0.659,,-0.427,faep_twoview_fae_ns_grad,,CONFOUNDED,R128/twoview; not res/protocol-matched

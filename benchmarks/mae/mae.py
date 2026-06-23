@@ -190,11 +190,12 @@ class MaskedAutoencoderViT(nn.Module):
 # Factories. mae_physics = MAE baseline (mask 0.75); ae_physics = AE (mask 0).
 # ~7M params at the defaults below (parity with FAE/JEPA) — see smoke test.
 # ----------------------------------------------------------------------
-def mae_physics(img_size=128, in_chans=4, patch_size=16, **kw):
-    # ~7M params (parity with FAE/JEPA) at 128^2, 4 channels.
+def mae_physics(img_size=128, in_chans=4, patch_size=16, embed_dim=256, depth=6, num_heads=8, **kw):
+    # ~7M params (parity with FAE/JEPA). embed_dim/depth/patch_size overridable for the
+    # capacity-matched REPA comparison (embed_dim=320, patch=4 -> 256 native tokens vs FAE).
     return MaskedAutoencoderViT(
         img_size=img_size, patch_size=patch_size, in_chans=in_chans,
-        embed_dim=256, depth=6, num_heads=8,
+        embed_dim=embed_dim, depth=depth, num_heads=num_heads,
         decoder_embed_dim=192, decoder_depth=3, decoder_num_heads=6, **kw)
 
 

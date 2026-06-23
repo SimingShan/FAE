@@ -21,6 +21,10 @@ from src.models import FAE
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 NTRAJ = 16   # trajectories/file for the probe set (denser than training's 8)
+SIDE = 64    # probe-field & sensor-grid resolution. FAE is resolution-free (coords in [0,1]), so we feed
+             # 64-grid sensors to EVERY encoder regardless of its training res (64/128/224) — both correct
+             # and consistent with how recon-FAE is used in REPA (generate.py also feeds it 64-grid sensors).
+             # coords/idx MUST be built at SIDE, not a["resolution"] (else idx OOB -> CUDA device assert).
 
 
 def probe(Ztr, ytr, Zte, yte, alpha=1.0):
@@ -51,15 +55,62 @@ def channel_stats(ds):
     return np.concatenate(X), np.concatenate(Y).ravel()
 
 
+@torch.no_grad()
+def embed_enc(enc, ds, coords, idx, batch=128):
+    """embed via a bare FAEEncoder.forward (FunctionalJEPA path) — mean+std pool, same as embed_fae."""
+    enc.eval(); Z, Y = [], []
+    for clip, y in DataLoader(ds, batch_size=batch):
+        fa = clip[:, :, 0].to(DEVICE)
+        tok = enc(fields_to_tokens(fa, idx), coords[idx])
+        Z.append(torch.cat([tok.mean(1), tok.std(1)], -1).cpu().numpy()); Y.append(y.numpy())
+    return np.concatenate(Z), np.concatenate(Y).ravel()
+
+
+@torch.no_grad()
+def embed_baseline(m, method, ds, batch=128):
+    """embed via a ViT baseline (MAE / I-JEPA) — patch-token mean+std pool (frame 0)."""
+    m.eval(); Z, Y = [], []
+    for clip, y in DataLoader(ds, batch_size=batch):
+        x = clip[:, :, 0].to(DEVICE)
+        tok = m.forward_encoder(x, 0.0)[0][:, 1:] if method == "mae" else m.target(x)
+        Z.append(torch.cat([tok.mean(1), tok.std(1)], -1).cpu().numpy()); Y.append(y.numpy())
+    return np.concatenate(Z), np.concatenate(Y).ravel()
+
+
+def load_baseline(ckpt_path):
+    """MAE / I-JEPA ViT baseline encoder (the REPA-target encoders), for the buoyancy probe."""
+    from scripts.train_baseline import build_model
+    ck = torch.load(ckpt_path, map_location=DEVICE); a = ck.get("train_args", {})
+    method = a.get("method"); R = a.get("resolution", 64); inc = a.get("in_chans") or 3
+    m = build_model("mae" if method == "mae" else "ijepa", resolution=R, in_chans=inc,
+                    embed_dim=a.get("embed_dim"), depth=a.get("depth"), patch_size=a.get("patch_size")).to(DEVICE)
+    m.load_state_dict(ck["model"]); m.eval()
+    return m, method
+
+
+def load_fjepa(ckpt_path):
+    """FunctionalJEPA (recon-free latent-predict): load its FAEEncoder, embed like any FAE."""
+    from src.models.fae import FAEEncoder
+    ck = torch.load(ckpt_path, map_location=DEVICE); a = ck["train_args"]; R = a["resolution"]
+    inc = 3 if a.get("dataset", "ns") == "ns" else 4
+    enc = FAEEncoder(emb_dim=a["emb_dim"], num_latents=a["num_latents"], coord_dim=2, in_chans=inc).to(DEVICE)
+    enc.load_state_dict(ck["encoder"])
+    coords = make_coords_2d(n_side=SIDE, device=DEVICE)                   # data grid, not a["resolution"]
+    g0 = torch.Generator(device=DEVICE).manual_seed(0)
+    idx = torch.randperm(SIDE * SIDE, generator=g0, device=DEVICE)[:1024]
+    return enc, coords, idx
+
+
 def load_fae(ckpt_path):
     ck = torch.load(ckpt_path, map_location=DEVICE)
-    a = ck["train_args"]; R = a["resolution"]; NPIX = R * R
+    a = ck["train_args"]; NPIX = SIDE * SIDE                              # data grid, not a["resolution"]
     inc = a.get("in_chans") or (3 if a.get("dataset") in ("ns", "flowbench") else 4)
-    model = FAE(emb_dim=a["emb_dim"], num_iter=a["num_iter"], depth_per_iter=4,
+    model = FAE(emb_dim=a["emb_dim"], num_iter=a.get("num_iter", 4), depth_per_iter=4,
                 num_latents=a["num_latents"], num_cross_heads=4, num_self_heads=8,
-                n_freq=32, max_freq=32, coord_dim=2, in_chans=inc).to(DEVICE)
+                n_freq=32, max_freq=32, coord_dim=2, in_chans=inc,
+                fourier_geometric=a.get("fourier_geometric", False)).to(DEVICE)
     model.load_state_dict(ck["model"])
-    coords = make_coords_2d(n_side=R, device=DEVICE)
+    coords = make_coords_2d(n_side=SIDE, device=DEVICE)
     g0 = torch.Generator(device=DEVICE).manual_seed(0)
     idx = torch.randperm(NPIX, generator=g0, device=DEVICE)[:1024]
     return model, coords, idx
@@ -68,8 +119,8 @@ def load_fae(ckpt_path):
 def main():
     print(f"=== NS buoyancy: unified linear-probe head-to-head (valid->test, ridge, standardized) ===")
     print("loading NS valid(probe-train) + test(probe-test) clips ...", flush=True)
-    va = NSDataset("valid", side=128, mode="clip", clip_len=2, frame_stride=4, n_traj=NTRAJ)
-    te = NSDataset("test", side=128, mode="clip", clip_len=2, frame_stride=4, n_traj=NTRAJ, stats=va.stats)
+    va = NSDataset("valid", side=SIDE, mode="clip", clip_len=2, frame_stride=4, n_traj=NTRAJ)
+    te = NSDataset("test", side=SIDE, mode="clip", clip_len=2, frame_stride=4, n_traj=NTRAJ, stats=va.stats)
     print(f"  probe-train {len(va)} clips ({len(set(np.round(va.labels,4)))} buoyancies), "
           f"probe-test {len(te)} clips ({len(set(np.round(te.labels,4)))} buoyancies)\n", flush=True)
     rows = []
@@ -80,7 +131,7 @@ def main():
     rows.append(("FLOOR channel mean+std", r2, mse, "-"))
 
     # OURS
-    for ck in sorted(glob.glob("results/checkpoints/g1/faep_*fae_ns*.pt")):
+    for ck in sorted(glob.glob("results/checkpoints/g1/faep_*ns*.pt")):
         try:
             model, coords, idx = load_fae(ck)
             Ztr, ytr = embed_fae(model, va, coords, idx); Zte, yte = embed_fae(model, te, coords, idx)
@@ -89,6 +140,30 @@ def main():
                          r2, mse, f"d={Ztr.shape[1]}"))
         except Exception as e:
             rows.append((f"OURS {os.path.basename(ck)} FAILED", float('nan'), float('nan'), str(e)[:40]))
+
+    # OURS-FJEPA (recon-free latent-predict VICReg)
+    for ck in sorted(glob.glob("results/checkpoints/g1/fjepa_*ns*.pt")):
+        try:
+            enc, coords, idx = load_fjepa(ck)
+            Ztr, ytr = embed_enc(enc, va, coords, idx); Zte, yte = embed_enc(enc, te, coords, idx)
+            r2, mse = probe(Ztr, ytr, Zte, yte)
+            rows.append((f"FJEPA {os.path.basename(ck).replace('fjepa_','').replace('.pt','')}",
+                         r2, mse, f"d={Ztr.shape[1]}"))
+        except Exception as e:
+            rows.append((f"FJEPA {os.path.basename(ck)} FAILED", float('nan'), float('nan'), str(e)[:40]))
+
+    # BASELINES (MAE / I-JEPA) — the REPA-target ViT encoders, NS-trained
+    for ck in sorted(glob.glob("results/checkpoints/g1/*ns*.pt")):
+        a = torch.load(ck, map_location="cpu").get("train_args") or {}
+        if a.get("method") not in ("mae", "ijepa"):
+            continue
+        try:
+            m, method = load_baseline(ck)
+            Ztr, ytr = embed_baseline(m, method, va); Zte, yte = embed_baseline(m, method, te)
+            r2, mse = probe(Ztr, ytr, Zte, yte)
+            rows.append((f"{method.upper()} {os.path.basename(ck).replace('.pt','')}", r2, mse, f"d={Ztr.shape[1]}"))
+        except Exception as e:
+            rows.append((f"BASE {os.path.basename(ck)} FAILED", float('nan'), float('nan'), str(e)[:40]))
 
     # THEIRS (best-effort)
     try:
