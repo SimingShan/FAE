@@ -1,0 +1,9 @@
+tier,date,category,name,dataset,res,objective,emb_dim,patch,lam,epochs,seeds,n_samples,metric,value,std,floor,ckpt,job,status,notes
+auto,2026-06-23,probe,mae_s0,ns,128,patch8,320,,,200,1,,R2_buoy,0.903,,-0.423,mae_ns128_s0.pt,fd72df6,auto,PR=4.1
+auto,2026-06-23,probe,jepa_s0,ns,128,patch8,320,,,200,1,,R2_buoy,0.7631,,-0.423,ijepa_ns128_s0.pt,fd72df6,auto,PR=50.9
+auto,2026-06-23,probe,mae_s1,ns,128,patch8,320,,,200,1,,R2_buoy,0.9225,,-0.423,mae_ns128_s1.pt,fd72df6,auto,PR=3.3
+auto,2026-06-23,probe,jepa_s1,ns,128,patch8,320,,,200,1,,R2_buoy,0.6267,,-0.423,ijepa_ns128_s1.pt,fd72df6,auto,PR=48.7
+auto,2026-06-23,probe,mae_s2,ns,128,patch8,320,,,200,1,,R2_buoy,0.9236,,-0.423,mae_ns128_s2.pt,fd72df6,auto,PR=3.7
+HEADLINE,2026-06-23,probe,mae,ns,128,patch8,320,,,200,3,,R2_buoy,0.9164,0.0095,-0.423,,,valid,git=fd72df6 enc=7.5M
+auto,2026-06-23,probe,jepa_s2,ns,128,patch8,320,,,200,1,,R2_buoy,0.7131,,-0.423,ijepa_ns128_s2.pt,fd72df6,auto,PR=46.5
+HEADLINE,2026-06-23,probe,jepa,ns,128,patch8,320,,,200,3,,R2_buoy,0.701,0.0564,-0.423,,,valid,git=fd72df6 enc=7.5M

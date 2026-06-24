@@ -29,7 +29,7 @@ param_tol_M: 1.0
 # ---- evaluation (identical readout across methods) ----
 eval_probe: buoyancy
 eval_split: valid_to_test          # fit probe on valid embeddings, test on test (both held out from encoder)
-eval_pool: mean_std                # frozen-feature pooling, same for FAE / MAE / JEPA
+eval_pool: mean                    # conventional pure linear probe (mean pool, NOT mean+std)
 ridge_alphas: [1.0e-3, 1.0e-2, 1.0e-1, 1.0, 10.0, 100.0, 1.0e3]   # RidgeCV — NOT a fixed alpha
 eval_fae_full_grid: true           # FAE eats the FULL grid at eval -> matched info with ViTs' full image
 eval_n_sensors: 1024               # only used if eval_fae_full_grid=false (the sparse-sensing variant)

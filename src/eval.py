@@ -26,23 +26,27 @@ def _pr(Z):
     return float(e.sum() ** 2 / max((e ** 2).sum(), 1e-30))
 
 
+def _pool(tok, mode):
+    return tok.mean(1) if mode == "mean" else torch.cat([tok.mean(1), tok.std(1)], -1)
+
+
 @torch.no_grad()
-def _embed_fae(model, ds, coords, idx, batch=32):
+def _embed_fae(model, ds, coords, idx, pool="mean", batch=32):
     Z, Y = [], []
     for clip, y in DataLoader(ds, batch_size=batch):
         fa = clip[:, :, 0].to(DEVICE)
         tok = model.encode_tokens(fields_to_tokens(fa, idx), coords[idx])
-        Z.append(torch.cat([tok.mean(1), tok.std(1)], -1).cpu().numpy()); Y.append(y.numpy())
+        Z.append(_pool(tok, pool).cpu().numpy()); Y.append(y.numpy())
     return np.concatenate(Z), np.concatenate(Y).ravel()
 
 
 @torch.no_grad()
-def _embed_vit(m, method, ds, batch=128):
+def _embed_vit(m, method, ds, pool="mean", batch=128):
     Z, Y = [], []
     for clip, y in DataLoader(ds, batch_size=batch):
         x = clip[:, :, 0].to(DEVICE)
         tok = m.forward_encoder(x, 0.0)[0][:, 1:] if method == "mae" else m.target(x)
-        Z.append(torch.cat([tok.mean(1), tok.std(1)], -1).cpu().numpy()); Y.append(y.numpy())
+        Z.append(_pool(tok, pool).cpu().numpy()); Y.append(y.numpy())
     return np.concatenate(Z), np.concatenate(Y).ravel()
 
 
@@ -68,7 +72,7 @@ def probe(cfg, ckpt_path):
                         embed_dim=a.get("embed_dim"), depth=a.get("depth"), patch_size=a.get("patch_size")).to(DEVICE)
         m.load_state_dict(ck["model"]); m.eval()
         meth = "mae" if method == "mae" else "jepa"
-        Ztr, ytr = _embed_vit(m, meth, va); Zte, yte = _embed_vit(m, meth, te)
+        Ztr, ytr = _embed_vit(m, meth, va, cfg.eval_pool); Zte, yte = _embed_vit(m, meth, te, cfg.eval_pool)
     else:                                                                   # FAE
         from src.models.fae import FAE
         m = FAE(emb_dim=a["emb_dim"], num_iter=a.get("num_iter", 4), num_latents=a["num_latents"],
@@ -80,7 +84,7 @@ def probe(cfg, ckpt_path):
         else:
             g0 = torch.Generator(device=DEVICE).manual_seed(0)
             idx = torch.randperm(NPIX, generator=g0, device=DEVICE)[:cfg.eval_n_sensors]
-        Ztr, ytr = _embed_fae(m, va, coords, idx); Zte, yte = _embed_fae(m, te, coords, idx)
+        Ztr, ytr = _embed_fae(m, va, coords, idx, cfg.eval_pool); Zte, yte = _embed_fae(m, te, coords, idx, cfg.eval_pool)
 
     r2, mse, alpha = _ridge(Ztr, ytr, Zte, yte, alphas)
     return dict(r2=r2, mse=mse, floor_r2=fr2, pr=_pr(Ztr), alpha=alpha, n_train=len(ytr), n_test=len(yte))
