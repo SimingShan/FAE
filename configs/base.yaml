@@ -1,0 +1,38 @@
+# ====================================================================================
+# SHARED EXPERIMENT BUDGET — every method config inherits this.
+# Comparisons are fair BY CONSTRUCTION: a method_data.yaml may ONLY set its own
+# architectural knobs; it may NOT override any key here (the loader rejects that).
+# ====================================================================================
+dataset: ns
+resolution: 128          # NS-buoyancy NATIVE resolution (no resize)
+in_chans: 3
+n_traj: 24               # trajectories/file (of 32 available) -> ~75% of data, ~105K frames @ 128^2
+frame_stride: 4
+
+# ---- training budget (identical across methods) ----
+epochs: 200              # train to convergence -> run ONCE
+batch: 64
+lr: 5.0e-4               # PEAK lr
+warmup_frac: 0.05        # linear warmup (SSL convention — NOT constant lr)
+scheduler: cosine        # cosine decay to ~0
+weight_decay: 1.0e-4     # default; methods may override (method-appropriate)
+betas: [0.9, 0.999]      # default Adam betas; methods may override
+amp: true
+seeds: [0, 1, 2]         # MULTI-SEED: every headline = mean±std. single-seed numbers WILL get re-run.
+seed: 0                  # current-run seed (the runner overrides this per element of `seeds`)
+
+# ---- matched capacity ----
+emb_dim: 320             # feature/latent dimension, identical for all methods
+param_budget_M: 7.0      # target ENCODER params; runner ASSERTS |actual-target| <= tol before running
+param_tol_M: 1.0
+
+# ---- evaluation (identical readout across methods) ----
+eval_probe: buoyancy
+eval_split: valid_to_test          # fit probe on valid embeddings, test on test (both held out from encoder)
+eval_pool: mean_std                # frozen-feature pooling, same for FAE / MAE / JEPA
+ridge_alphas: [1.0e-3, 1.0e-2, 1.0e-1, 1.0, 10.0, 100.0, 1.0e3]   # RidgeCV — NOT a fixed alpha
+eval_fae_full_grid: true           # FAE eats the FULL grid at eval -> matched info with ViTs' full image
+eval_n_sensors: 1024               # only used if eval_fae_full_grid=false (the sparse-sensing variant)
+eval_n_traj: 16                    # trajectories/file for the probe valid/test sets
+
+ckpt_dir: results/checkpoints

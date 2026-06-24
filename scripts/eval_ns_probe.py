@@ -56,17 +56,6 @@ def channel_stats(ds):
 
 
 @torch.no_grad()
-def embed_enc(enc, ds, coords, idx, batch=128):
-    """embed via a bare FAEEncoder.forward (FunctionalJEPA path) — mean+std pool, same as embed_fae."""
-    enc.eval(); Z, Y = [], []
-    for clip, y in DataLoader(ds, batch_size=batch):
-        fa = clip[:, :, 0].to(DEVICE)
-        tok = enc(fields_to_tokens(fa, idx), coords[idx])
-        Z.append(torch.cat([tok.mean(1), tok.std(1)], -1).cpu().numpy()); Y.append(y.numpy())
-    return np.concatenate(Z), np.concatenate(Y).ravel()
-
-
-@torch.no_grad()
 def embed_baseline(m, method, ds, batch=128):
     """embed via a ViT baseline (MAE / I-JEPA) — patch-token mean+std pool (frame 0)."""
     m.eval(); Z, Y = [], []
@@ -86,19 +75,6 @@ def load_baseline(ckpt_path):
                     embed_dim=a.get("embed_dim"), depth=a.get("depth"), patch_size=a.get("patch_size")).to(DEVICE)
     m.load_state_dict(ck["model"]); m.eval()
     return m, method
-
-
-def load_fjepa(ckpt_path):
-    """FunctionalJEPA (recon-free latent-predict): load its FAEEncoder, embed like any FAE."""
-    from src.models.fae import FAEEncoder
-    ck = torch.load(ckpt_path, map_location=DEVICE); a = ck["train_args"]; R = a["resolution"]
-    inc = 3 if a.get("dataset", "ns") == "ns" else 4
-    enc = FAEEncoder(emb_dim=a["emb_dim"], num_latents=a["num_latents"], coord_dim=2, in_chans=inc).to(DEVICE)
-    enc.load_state_dict(ck["encoder"])
-    coords = make_coords_2d(n_side=SIDE, device=DEVICE)                   # data grid, not a["resolution"]
-    g0 = torch.Generator(device=DEVICE).manual_seed(0)
-    idx = torch.randperm(SIDE * SIDE, generator=g0, device=DEVICE)[:1024]
-    return enc, coords, idx
 
 
 def load_fae(ckpt_path):
@@ -140,17 +116,6 @@ def main():
                          r2, mse, f"d={Ztr.shape[1]}"))
         except Exception as e:
             rows.append((f"OURS {os.path.basename(ck)} FAILED", float('nan'), float('nan'), str(e)[:40]))
-
-    # OURS-FJEPA (recon-free latent-predict VICReg)
-    for ck in sorted(glob.glob("results/checkpoints/g1/fjepa_*ns*.pt")):
-        try:
-            enc, coords, idx = load_fjepa(ck)
-            Ztr, ytr = embed_enc(enc, va, coords, idx); Zte, yte = embed_enc(enc, te, coords, idx)
-            r2, mse = probe(Ztr, ytr, Zte, yte)
-            rows.append((f"FJEPA {os.path.basename(ck).replace('fjepa_','').replace('.pt','')}",
-                         r2, mse, f"d={Ztr.shape[1]}"))
-        except Exception as e:
-            rows.append((f"FJEPA {os.path.basename(ck)} FAILED", float('nan'), float('nan'), str(e)[:40]))
 
     # BASELINES (MAE / I-JEPA) — the REPA-target ViT encoders, NS-trained
     for ck in sorted(glob.glob("results/checkpoints/g1/*ns*.pt")):

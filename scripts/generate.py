@@ -81,30 +81,6 @@ def fae_feats(m, fields, coords, sidx, pcoords):
     return m.decoder(lat, pcoords, return_feats=True)                # (B, n_patch, dec_dim)
 
 
-def fjepa_setup(ckpt, R, patch):
-    """FunctionalJEPA (recon-free) REPA target: frozen encoder + a FROZEN seeded cross-attn readout
-    (FAEDecoder, never trained) that queries the 128 latents at grid coords -> per-patch features."""
-    from src.models.fae import FAEEncoder, FAEDecoder
-    from src.data.well2d import make_coords_2d
-    ck = torch.load(ckpt, map_location=DEVICE); a = ck["train_args"]
-    inc = 3 if a.get("dataset", "ns") == "ns" else 4
-    enc = FAEEncoder(emb_dim=a["emb_dim"], num_latents=a["num_latents"], coord_dim=2, in_chans=inc).to(DEVICE)
-    enc.load_state_dict(ck["encoder"]); enc.eval(); [p.requires_grad_(False) for p in enc.parameters()]
-    torch.manual_seed(0)                                                  # fixed readout for reproducibility
-    readout = FAEDecoder(emb_dim_in=a["emb_dim"], dec_dim=a["emb_dim"], coord_dim=2, out_chans=inc).to(DEVICE).eval()
-    [p.requires_grad_(False) for p in readout.parameters()]
-    coords = make_coords_2d(R, DEVICE); g = torch.Generator(device=DEVICE).manual_seed(0)
-    sidx = torch.randperm(R * R, generator=g, device=DEVICE)[:512]
-    return enc, readout, coords, sidx, patch_center_coords(R, patch, DEVICE)
-
-
-@torch.no_grad()
-def fjepa_feats(enc, readout, fields, coords, sidx, pcoords):
-    from src.data.well2d import fields_to_tokens
-    lat = enc(fields_to_tokens(fields, sidx), coords[sidx])
-    return readout(lat, pcoords, return_feats=True)                      # (B, n_patch, emb_dim)
-
-
 @torch.no_grad()
 def fae_dense(m, fields, coords, sidx):
     """FAE reconstructs the FULL grid from `sidx` scattered sensors -> dense conditioning field (sparse mode)."""
@@ -131,11 +107,9 @@ def enc_feats(m, method, x, grid):
     return t.flatten(2).transpose(1, 2)
 
 
-def align_target(args, x, fae, fc, fs, fp, enc, grid, fj=None):
+def align_target(args, x, fae, fc, fs, fp, enc, grid):
     if args.align == "fae":
         return fae_feats(fae, x, fc, fs, fp)
-    if args.align == "fjepa":
-        return fjepa_feats(fj[0], fj[1], x, fj[2], fj[3], fj[4])
     return enc_feats(enc, args.align, x, grid)
 
 
@@ -176,7 +150,7 @@ def sample(model, n, C, R, y=None, cond=None, ncls=None, cfg=1.0, steps=50):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--mode", choices=["uncond", "param", "sparse", "all"], default="uncond")
-    ap.add_argument("--align", choices=["none", "fae", "fjepa", "mae", "jepa"], default="none")
+    ap.add_argument("--align", choices=["none", "fae", "mae", "jepa"], default="none")
     ap.add_argument("--dataset", default="ns"); ap.add_argument("--resolution", type=int, default=64)
     ap.add_argument("--size", default="SiT-S/4"); ap.add_argument("--depth", type=int, default=4)
     ap.add_argument("--lam", type=float, default=0.5); ap.add_argument("--cfg", type=float, default=1.5)
@@ -185,7 +159,6 @@ def main():
     ap.add_argument("--lr", type=float, default=1e-4); ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--tag", default="gen"); ap.add_argument("--enc_ckpt", default="")
     ap.add_argument("--fae_ckpt", default="results/checkpoints/g1/faep_twoview_fae_ns_tw.pt")
-    ap.add_argument("--fjepa_ckpt", default="results/checkpoints/g1/fjepa_vicreg_ns_v1.pt")
     args = ap.parse_args(); set_seed(args.seed)
     R = args.resolution; C = 3 if args.dataset == "ns" else 4
     print(f"=== generate [{args.tag}] mode={args.mode} align={args.align} ds={args.dataset}({C}ch) "
@@ -196,7 +169,7 @@ def main():
                     worker_init_fn=seed_worker, generator=torch_generator(args.seed))
     sz = args.size.split("-")[1].split("/")[0]; patch = int(args.size.split("/")[1]); grid = R // patch
     extra = {"decoder_hidden_size": 384} if sz == "S" else {}
-    if args.align in ("none", "fae", "fjepa"):
+    if args.align in ("none", "fae"):
         zdim = 320
     else:                                                            # mae/jepa: match the encoder's actual width
         zdim = torch.load(args.enc_ckpt, map_location="cpu").get("train_args", {}).get("embed_dim") or 256
@@ -210,14 +183,12 @@ def main():
     print(f"  SiT params {sum(p.numel() for p in model.parameters())/1e6:.1f}M  (in_ch={in_ch})", flush=True)
 
     # alignment + sparse-conditioning encoders (FAE is needed for sparse regardless of --align)
-    fae = fc = fs = fp = enc = fj = None
+    fae = fc = fs = fp = enc = None
     need_fae = args.align == "fae" or args.mode in ("sparse", "all")
     if need_fae:
         fae, fc, fs, fp = fae_setup(args.fae_ckpt, R, patch)
     if args.align in ("mae", "jepa"):
         enc = enc_setup(args.align, args.enc_ckpt, R, C)
-    if args.align == "fjepa":
-        fj = fjepa_setup(args.fjepa_ckpt, R, patch)              # (enc, readout, coords, sidx, pcoords)
     if args.align != "none":
         print(f"  REPA align -> {args.align} (lam={args.lam})", flush=True)
 
@@ -248,7 +219,7 @@ def main():
             inp = xt if cond is None else torch.cat([xt, cond], 1)
             v, zs = model(inp, t, y); loss = F.mse_loss(v[:, :C], eps - x)
             if args.align != "none":
-                tgt = align_target(args, x, fae, fc, fs, fp, enc, grid, fj)
+                tgt = align_target(args, x, fae, fc, fs, fp, enc, grid)
                 loss = loss + args.lam * (1 - F.cosine_similarity(F.normalize(zs[0], dim=-1), F.normalize(tgt, dim=-1), dim=-1).mean())
             opt.zero_grad(); loss.backward(); opt.step()
             with torch.no_grad():

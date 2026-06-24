@@ -1,3 +1,4 @@
+import math
 """Reconstruction-based SSL on shear_flow — the task-AGNOSTIC objective (recover the
 field, knows nothing about Re/Sc). Encoder is the product; decoder/predictor discarded
 at eval. Frozen encoder -> mean+std readout -> linear probe (logRe, Sc) + PR.
@@ -8,7 +9,7 @@ modes:
                     target = real future pixels = NON-collapsible => forces dynamics)
   predict_vicreg C: B + VICReg between two sparse views of x_t (observation-invariance).
 """
-import sys, os, time, argparse
+import sys, os, time, math, argparse
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np, torch, torch.nn as nn, torch.nn.functional as F
 from torch.utils.data import DataLoader
@@ -100,10 +101,15 @@ def main():
     ap.add_argument("--epochs", type=int, default=80)
     ap.add_argument("--batch", type=int, default=128)
     ap.add_argument("--lr", type=float, default=5e-4)
+    ap.add_argument("--weight_decay", type=float, default=1e-4)
+    ap.add_argument("--warmup_frac", type=float, default=0.05)
+    ap.add_argument("--betas", type=float, nargs=2, default=[0.9, 0.999])
     ap.add_argument("--dt_max", type=int, default=4)
     ap.add_argument("--dt_fixed", type=int, default=0,
                     help="0 = random Δ in [1,dt_max] (Δ fed to predictor); >0 = fixed horizon Δ")
     ap.add_argument("--mcnt", type=int, nargs="+", default=[256, 512])
+    ap.add_argument("--mcnt_range", type=int, nargs=2, default=None,
+                    help="if set [lo hi], sample sensor count UNIFORMLY in [lo,hi] per view (overrides --mcnt)")
     ap.add_argument("--n_query", type=int, default=1024)
     ap.add_argument("--lam_rec", type=float, default=1.0)
     ap.add_argument("--sim", type=float, default=5.0)
@@ -115,6 +121,7 @@ def main():
     ap.add_argument("--emb_dim", type=int, default=320)
     ap.add_argument("--proj_dim", type=int, default=4096)
     ap.add_argument("--n_seed", type=int, default=24)
+    ap.add_argument("--n_traj", type=int, default=12, help="NS trajectories/file (data scale)")
     ap.add_argument("--frame_stride", type=int, default=4)
     ap.add_argument("--resolution", type=int, default=224)
     ap.add_argument("--seed", type=int, default=0)
@@ -136,14 +143,14 @@ def main():
     do_future = args.mode != "recon"                        # recon x_{t+Δ} via predictor
     use_vic = args.mode == "predict_vicreg"
     clip_len = (max(args.dt_max, args.dt_fixed) + 1) if pred_mode else 2
-    print(f"=== FAE-{args.mode} [{args.tag}] dt_max={args.dt_max} mcnt={args.mcnt} "
+    print(f"=== FAE-{args.mode} [{args.tag}] dt_max={args.dt_max} mcnt={args.mcnt_range or args.mcnt} "
           f"n_query={args.n_query} res={R} ===", flush=True)
 
     in_chans = args.in_chans if args.in_chans is not None else (3 if args.dataset in ("flowbench", "ns") else 4)
     if args.dataset == "ns":
         from src.data.ns import NSDataset
         PARAMS[:] = ["buoyancy"]
-        tr = NSDataset("train", side=R, mode="clip", clip_len=clip_len, frame_stride=args.frame_stride, n_traj=8)
+        tr = NSDataset("train", side=R, mode="clip", clip_len=clip_len, frame_stride=args.frame_stride, n_traj=args.n_traj)
         va = NSDataset("valid", side=R, mode="clip", clip_len=clip_len, frame_stride=args.frame_stride, n_traj=8, stats=tr.stats)
     elif args.dataset == "flowbench":
         from src.data.flowbench import FlowBenchFPO
@@ -172,8 +179,13 @@ def main():
     params = list(model.parameters())
     if predictor is not None: params += list(predictor.parameters())
     if proj is not None: params += list(proj.parameters())
-    opt = torch.optim.AdamW(params, lr=args.lr, weight_decay=1e-4)
-    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.epochs)
+    opt = torch.optim.AdamW(params, lr=args.lr, weight_decay=args.weight_decay, betas=tuple(args.betas))
+    warm = max(1, int(args.warmup_frac * args.epochs))           # warmup+cosine (matched to baselines)
+    def _lr(ep):
+        if ep < warm: return (ep + 1) / warm
+        p = (ep - warm) / max(1, args.epochs - warm)
+        return 0.5 * (1 + math.cos(math.pi * p))
+    sched = torch.optim.lr_scheduler.LambdaLR(opt, _lr)
     g0 = torch.Generator(device=DEVICE).manual_seed(0)
     probe_idx = torch.randperm(NPIX, generator=g0, device=DEVICE)[:1024]
     t0 = time.time()
@@ -192,7 +204,7 @@ def main():
                 fa = clip[bidx, :, ts]; fb = clip[bidx, :, ts + delta]; dt = delta.float() / args.dt_max
             else:
                 fa = clip[:, :, 0]; fb = fa; dt = None
-            nA = int(np.random.choice(args.mcnt))
+            nA = (np.random.randint(args.mcnt_range[0], args.mcnt_range[1] + 1) if args.mcnt_range else int(np.random.choice(args.mcnt)))
             iA = torch.randperm(NPIX, device=DEVICE)[:nA]
             iq = torch.randperm(NPIX, device=DEVICE)[:args.n_query]
             tgt_t = fields_to_tokens(fa, iq); tgt_f = fields_to_tokens(fb, iq)
@@ -219,16 +231,16 @@ def main():
             if do_future:                                           # future-field recon (non-collapsible)
                 lf = F.mse_loss(model.decoder(tdec, coords[iq]), tgt_f); loss = loss + lf; l_rec = l_rec + lf
             if args.mode == "siam":                                 # invariance via latent-match (no VICReg)
-                nB = int(np.random.choice(args.mcnt)); iB = torch.randperm(NPIX, device=DEVICE)[:nB]
+                nB = (np.random.randint(args.mcnt_range[0], args.mcnt_range[1] + 1) if args.mcnt_range else int(np.random.choice(args.mcnt))); iB = torch.randperm(NPIX, device=DEVICE)[:nB]
                 Lb = model.encode_tokens(fields_to_tokens(fb, iB), coords[iB]).detach()   # diff view of future
                 loss = loss + args.lam_match * F.mse_loss(tdec, Lb)
             if args.mode == "twoview":                              # invariance via SHARED recon target
-                nB = int(np.random.choice(args.mcnt)); iB = torch.randperm(NPIX, device=DEVICE)[:nB]
+                nB = (np.random.randint(args.mcnt_range[0], args.mcnt_range[1] + 1) if args.mcnt_range else int(np.random.choice(args.mcnt))); iB = torch.randperm(NPIX, device=DEVICE)[:nB]
                 tB = model.encode_tokens(fields_to_tokens(fa, iB), coords[iB])            # 2nd view of x_t
                 loss = loss + F.mse_loss(model.decoder(tB, coords[iq]), tgt_t)
                 loss = loss + F.mse_loss(model.decoder(predictor(tB, dt), coords[iq]), tgt_f)
             if use_vic:
-                nB = int(np.random.choice(args.mcnt))
+                nB = (np.random.randint(args.mcnt_range[0], args.mcnt_range[1] + 1) if args.mcnt_range else int(np.random.choice(args.mcnt)))
                 iB = torch.randperm(NPIX, device=DEVICE)[:nB]
                 tB = model.encode_tokens(fields_to_tokens(fa, iB), coords[iB])
                 l_sim, l_std, l_cov = vicreg(proj, model.represent(tA), model.represent(tB), B)

@@ -66,8 +66,8 @@ def probe2(Ztr, Ytr, Zva, Yva):
 
 
 def build_model(method, resolution=224, n_frames=1, tubelet=2, in_chans=4, norm_pix=False,
-                embed_dim=None, depth=None, patch_size=None):
-    vit = {k: v for k, v in (("embed_dim", embed_dim), ("depth", depth), ("patch_size", patch_size)) if v}
+                embed_dim=None, depth=None, patch_size=None, num_heads=None):
+    vit = {k: v for k, v in (("embed_dim", embed_dim), ("depth", depth), ("patch_size", patch_size), ("num_heads", num_heads)) if v}
     if method in ("ae", "mae"):
         from benchmarks.mae.mae import mae_physics
         return mae_physics(img_size=resolution, in_chans=in_chans, norm_pix_loss=norm_pix, **vit).to(DEVICE)
@@ -128,12 +128,18 @@ def main():
     ap.add_argument("--embed_dim", type=int, default=None, help="ViT width override (match FAE: 320)")
     ap.add_argument("--depth", type=int, default=None, help="ViT depth override")
     ap.add_argument("--patch_size", type=int, default=None, help="ViT patch override (match SiT grid: 4)")
+    ap.add_argument("--n_traj", type=int, default=12, help="NS trajectories/file (data scale)")
+    ap.add_argument("--warmup_frac", type=float, default=0.05)
+    ap.add_argument("--frame_stride", type=int, default=4)
+    ap.add_argument("--betas", type=float, nargs=2, default=None)
+    ap.add_argument("--num_heads", type=int, default=None)
     args = ap.parse_args()
     torch.manual_seed(args.seed); np.random.seed(args.seed)
 
     cfg = CFG[args.method]
     lr = args.lr if args.lr is not None else cfg["lr"]
     wd = args.wd if args.wd is not None else cfg["wd"]
+    betas = tuple(args.betas) if args.betas is not None else cfg["betas"]
     print(f"=== {args.method.upper()} shear_flow [{args.tag}]  res={args.resolution} batch={args.batch} "
           f"epochs={args.epochs} lr={lr:.1e} wd={wd} amp={args.amp} ===", flush=True)
 
@@ -142,8 +148,8 @@ def main():
         from src.data.ns import NSDataset
         PARAMS[:] = ["buoyancy"]
         mode = "clip" if args.method in ("videomae", "stjepa") else "single"
-        tr = NSDataset("train", side=args.resolution, mode=mode, clip_len=max(args.n_frames, 2), frame_stride=4, n_traj=12)
-        va = NSDataset("valid", side=args.resolution, mode=mode, clip_len=max(args.n_frames, 2), frame_stride=4, n_traj=12, stats=tr.stats)
+        tr = NSDataset("train", side=args.resolution, mode=mode, clip_len=max(args.n_frames, 2), frame_stride=args.frame_stride, n_traj=args.n_traj)
+        va = NSDataset("valid", side=args.resolution, mode=mode, clip_len=max(args.n_frames, 2), frame_stride=args.frame_stride, n_traj=8, stats=tr.stats)
     elif args.dataset == "flowbench":
         from src.data.flowbench import FlowBenchFPO
         PARAMS[:] = ["Strouhal"]
@@ -162,11 +168,11 @@ def main():
                         num_workers=args.workers, pin_memory=True)
 
     model = build_model(args.method, args.resolution, args.n_frames, args.tubelet, in_chans, args.norm_pix,
-                        embed_dim=args.embed_dim, depth=args.depth, patch_size=args.patch_size)
+                        embed_dim=args.embed_dim, depth=args.depth, patch_size=args.patch_size, num_heads=args.num_heads)
     npar = sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e6
     print(f"  params(trainable)={npar:.2f}M", flush=True)
-    opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=wd, betas=cfg["betas"])
-    warm = max(1, int(0.05 * args.epochs))
+    opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=wd, betas=betas)
+    warm = max(1, int(args.warmup_frac * args.epochs))
 
     def lr_lambda(ep):
         if ep < warm:
@@ -202,7 +208,7 @@ def main():
             print(f"ep {ep+1:3d}/{args.epochs}  loss={run/n:.4e}  PR={pr:.1f}  "
                   f"probe {ps}  ({time.time()-t0:.0f}s)", flush=True)
 
-    out = f"results/checkpoints/g1/{args.method}_shear_{args.tag}.pt"
+    out = f"results/checkpoints/g1/{args.method}_{args.tag}.pt"
     os.makedirs(os.path.dirname(out), exist_ok=True)
     torch.save({"model": model.state_dict(), "stats": tr.stats, "train_args": vars(args)}, out)
     Ztr, Ytr = embed(model, tr); Zva, Yva = embed(model, va)
