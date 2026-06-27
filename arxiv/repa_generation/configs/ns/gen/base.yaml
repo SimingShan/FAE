@@ -1,0 +1,36 @@
+# ====================================================================================
+# SHARED REPA-GENERATION BUDGET — every gen variant inherits this (found by walk-up).
+# Fair BY CONSTRUCTION: a gen variant (none/fae/mae/jepa) may set ONLY {align, tag}.
+# Everything that must match across alignment targets lives here and is loader-protected.
+# ====================================================================================
+dataset: ns
+resolution: 128          # native (NO downsample) — the res-drift bug is fatal for gen too
+in_chans: 3
+mode: uncond             # campaign regime: uncond | param | sparse
+
+# ---- SiT backbone (identical across align targets) ----
+sit_size: SiT-S/4        # backbone + patch
+sit_depth: 4             # which SiT block REPA aligns
+lam: 0.5                 # REPA alignment weight (ignored when align=none)
+cfg_scale: 1.5           # classifier-free guidance (param mode)
+steps: 50                # sampler ODE steps
+n_sensors: 256           # sparse-mode observed sensors
+
+# ---- gen training budget (identical across align targets) ----
+gen_epochs: 150         # generous ceiling — pilot (none, seed 0) confirms the plateau before the 4x3 campaign
+gen_batch: 32
+gen_lr: 1.0e-4
+gen_n_traj: 12           # NS trajectories/file for gen training data
+seeds: [0, 1, 2]         # MULTI-SEED: spectrum_dist is NOISY (hard rule #3) -> mean±std
+seed: 0
+
+# ---- evaluation (the #1 generation gotcha: many-sample + multi-seed) ----
+n_samples: 2048          # generated samples for spectrum_dist (>=1024 mandatory)
+eval_split: valid        # held-out reference frames for the spectrum / relL2
+
+# ---- frozen alignment encoders (seed-0 checkpoints under results/checkpoints/ns/<method>/) ----
+fae_tag: fae_ns128
+mae_tag: mae_ns128
+jepa_tag: jepa_ns128
+
+ckpt_dir: results/checkpoints

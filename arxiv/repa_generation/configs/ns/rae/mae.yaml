@@ -1,0 +1,3 @@
+# RAE with frozen mae encoder: diffuse IN its latent (decoded by the trained coordinate decoder).
+encoder: mae
+tag: rae_mae

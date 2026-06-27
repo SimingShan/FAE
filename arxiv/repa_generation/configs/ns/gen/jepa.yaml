@@ -1,0 +1,3 @@
+# REPA align SiT tokens to frozen I-JEPA per-patch features.
+align: jepa
+tag: gen_jepa

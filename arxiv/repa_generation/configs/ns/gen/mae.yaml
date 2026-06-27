@@ -1,0 +1,3 @@
+# REPA align SiT tokens to frozen MAE per-patch features.
+align: mae
+tag: gen_mae

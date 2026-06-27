@@ -1,0 +1,47 @@
+# SHARED budget for shear_flow — every method inherits; method configs set ONLY their own knobs.
+dataset: shear
+resolution: 128          # standardized to 128 across NS/shear/typhoon
+in_chans: 4
+n_traj: 24
+frame_stride: 4
+epochs: 200              # matched to NS (train to convergence)
+batch: 64
+lr: 5.0e-4
+warmup_frac: 0.05
+scheduler: cosine
+weight_decay: 1.0e-4
+betas: [0.9, 0.999]
+amp: true
+seeds: [0]               # single-seed first pass (train-once); add [0,1,2] later for headline rigor
+seed: 0
+emb_dim: 320
+param_budget_M: 7.0
+param_tol_M: 1.5
+eval_probe: logRe
+eval_split: valid_to_test
+eval_pool: mean
+ridge_alphas: [1.0e-3, 1.0e-2, 1.0e-1, 1.0, 10.0, 100.0, 1.0e3]
+eval_fae_full_grid: true
+eval_n_sensors: 1024
+eval_n_traj: 8
+ckpt_dir: results/checkpoints
+
+# ---- trainer knobs (config-driven; NOTHING hardcoded in the trainer) ----
+n_seed: 32              # shear: trajectories/file used (ns/typhoon use n_traj instead)
+num_cross_heads: 4       # FAE encoder cross-attn heads
+num_self_heads: 8        # FAE encoder self-attn heads
+n_freq: 32               # FAE Fourier-feature count
+max_freq: 32             # FAE Fourier max frequency
+pred_depth: 2            # FAE temporal predictor depth
+n_query: 1024            # FAE recon query points/step
+dt_fixed: 0              # 0 = random Δ in [1,dt_max]; >0 = fixed horizon
+n_frames: 1              # MAE/JEPA frames/sample (1 = single-frame)
+n_ctx: 40                # JEPA context block size
+n_tgt: 12                # JEPA target block size
+ctx_frac: 0.2            # JEPA context fraction
+tgt_frac: 0.06           # JEPA target fraction
+tubelet: 2               # JEPA temporal tubelet
+ema_start: 0.996         # JEPA EMA momentum start
+ema_end: 1.0             # JEPA EMA momentum end
+res_h: 128              # FAE native-aspect height (ViTs stay square 128)
+res_w: 256              # FAE native-aspect width (1:2) -> MAE must squish = its disadvantage

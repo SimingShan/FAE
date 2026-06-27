@@ -36,3 +36,21 @@ eval_n_sensors: 1024               # only used if eval_fae_full_grid=false (the 
 eval_n_traj: 16                    # trajectories/file for the probe valid/test sets
 
 ckpt_dir: results/checkpoints
+
+# ---- trainer knobs (config-driven; NOTHING hardcoded in the trainer) ----
+n_seed: 24              # shear: trajectories/file used (ns/typhoon use n_traj instead)
+num_cross_heads: 4       # FAE encoder cross-attn heads
+num_self_heads: 8        # FAE encoder self-attn heads
+n_freq: 32               # FAE Fourier-feature count
+max_freq: 32             # FAE Fourier max frequency
+pred_depth: 2            # FAE temporal predictor depth
+n_query: 1024            # FAE recon query points/step
+dt_fixed: 0              # 0 = random Δ in [1,dt_max]; >0 = fixed horizon
+n_frames: 1              # MAE/JEPA frames/sample (1 = single-frame)
+n_ctx: 40                # JEPA context block size
+n_tgt: 12                # JEPA target block size
+ctx_frac: 0.2            # JEPA context fraction
+tgt_frac: 0.06           # JEPA target fraction
+tubelet: 2               # JEPA temporal tubelet
+ema_start: 0.996         # JEPA EMA momentum start
+ema_end: 1.0             # JEPA EMA momentum end

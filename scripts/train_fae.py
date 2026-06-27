@@ -15,7 +15,7 @@ import numpy as np, torch, torch.nn as nn, torch.nn.functional as F
 from torch.utils.data import DataLoader
 from src.models import FAE
 from src.models.fae import TokenPredictor
-from src.data.well2d import ShearFlowClipDataset, make_coords_2d, fields_to_tokens
+from src.data.well2d import ShearFlowClipDataset, make_coords_2d, make_coords_2d_hw, fields_to_tokens
 from src.metrics import lin_probe
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -96,7 +96,8 @@ def main():
         "predict_vicreg", # C: B + VICReg (deprecated — hurts)
         "recon_both",     # 3: present recon (anchor to x_t) + future-field recon (dynamics)
         "siam",           # 4: recon_both + latent-match to a diff-sparsity future view (no VICReg)
-        "twoview"])       # 4' DEFAULT: dual-view (two present sparsities, shared recon targets) + temporal predict
+        "twoview",        # 4' DEFAULT: dual-view (two present sparsities, shared recon targets) + temporal predict
+        "twoview_present"])  # ABLATION: dual-view shared present target, NO temporal (invariance-only cell)
     ap.add_argument("--lam_match", type=float, default=1.0, help="weight on siam latent-match term")
     ap.add_argument("--epochs", type=int, default=80)
     ap.add_argument("--batch", type=int, default=128)
@@ -110,6 +111,8 @@ def main():
     ap.add_argument("--mcnt", type=int, nargs="+", default=[256, 512])
     ap.add_argument("--mcnt_range", type=int, nargs=2, default=None,
                     help="if set [lo hi], sample sensor count UNIFORMLY in [lo,hi] per view (overrides --mcnt)")
+    ap.add_argument("--sensor_pattern", default="discrete", choices=["discrete", "continuous"],
+                    help="input-view layout: 'discrete' random scatter, or 'continuous' contiguous block")
     ap.add_argument("--n_query", type=int, default=1024)
     ap.add_argument("--lam_rec", type=float, default=1.0)
     ap.add_argument("--sim", type=float, default=5.0)
@@ -118,16 +121,24 @@ def main():
     ap.add_argument("--pred_depth", type=int, default=2)
     ap.add_argument("--num_latents", type=int, default=128, help="encoder bottleneck width (capacity)")
     ap.add_argument("--num_iter", type=int, default=4, help="encoder cross/self iterations (depth)")
+    ap.add_argument("--depth_per_iter", type=int, default=5, help="self-attn blocks per iter (config-driven; NOT hardcoded)")
+    ap.add_argument("--num_cross_heads", type=int, default=4)
+    ap.add_argument("--num_self_heads", type=int, default=8)
+    ap.add_argument("--n_freq", type=int, default=32)
+    ap.add_argument("--max_freq", type=int, default=32)
     ap.add_argument("--emb_dim", type=int, default=320)
     ap.add_argument("--proj_dim", type=int, default=4096)
     ap.add_argument("--n_seed", type=int, default=24)
     ap.add_argument("--n_traj", type=int, default=12, help="NS trajectories/file (data scale)")
     ap.add_argument("--frame_stride", type=int, default=4)
     ap.add_argument("--resolution", type=int, default=224)
+    ap.add_argument("--res_h", type=int, default=None, help="non-square FAE height (default=--resolution); shear native-aspect")
+    ap.add_argument("--res_w", type=int, default=None, help="non-square FAE width (preserve native 1:2 aspect)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--tag", default="faep")
     ap.add_argument("--save", action=argparse.BooleanOptionalAction, default=True)  # saves by default; --no-save to skip
-    ap.add_argument("--dataset", choices=["shear", "flowbench", "ns"], default="shear")
+    ap.add_argument("--ckpt_out", default=None, help="explicit checkpoint path (runner sets the organized path); else legacy g1/")
+    ap.add_argument("--dataset", choices=["shear", "flowbench", "ns", "typhoon"], default="shear")
     ap.add_argument("--in_chans", type=int, default=None, help="default 4 (shear) / 3 (flowbench,ns)")
     ap.add_argument("--norm_target", action="store_true", help="per-sample per-channel amplitude-stripped recon target")
     ap.add_argument("--lam_grad", type=float, default=0.0, help="gradient-loss weight (spectral-bias fix)")
@@ -137,21 +148,29 @@ def main():
     args = ap.parse_args()
     from src.utils import set_seed
     set_seed(args.seed)
-    R = args.resolution; NPIX = R * R
-    pred_mode = args.mode != "recon"                       # uses (t, t+Δ) clip + predictor
-    do_present = args.mode in ("recon", "recon_both", "siam", "twoview")   # recon x_t (anchor)
-    do_future = args.mode != "recon"                        # recon x_{t+Δ} via predictor
+    R = args.resolution
+    RH, RW = (args.res_h or R), (args.res_w or R); NPIX = RH * RW          # non-square -> native aspect (FAE only)
+    side_arg = R if (args.res_h is None and args.res_w is None) else (RH, RW)
+    no_temporal = args.mode in ("recon", "twoview_present")  # single-frame cells (no predictor/future)
+    pred_mode = not no_temporal                             # uses (t, t+Δ) clip + predictor
+    do_present = args.mode in ("recon", "recon_both", "siam", "twoview", "twoview_present")  # recon x_t (anchor)
+    do_future = not no_temporal                             # recon x_{t+Δ} via predictor
     use_vic = args.mode == "predict_vicreg"
     clip_len = (max(args.dt_max, args.dt_fixed) + 1) if pred_mode else 2
     print(f"=== FAE-{args.mode} [{args.tag}] dt_max={args.dt_max} mcnt={args.mcnt_range or args.mcnt} "
-          f"n_query={args.n_query} res={R} ===", flush=True)
+          f"n_query={args.n_query} res={RH}x{RW} ===", flush=True)
 
-    in_chans = args.in_chans if args.in_chans is not None else (3 if args.dataset in ("flowbench", "ns") else 4)
+    in_chans = args.in_chans if args.in_chans is not None else (1 if args.dataset == "typhoon" else 3 if args.dataset in ("flowbench", "ns") else 4)
     if args.dataset == "ns":
         from src.data.ns import NSDataset
         PARAMS[:] = ["buoyancy"]
         tr = NSDataset("train", side=R, mode="clip", clip_len=clip_len, frame_stride=args.frame_stride, n_traj=args.n_traj)
         va = NSDataset("valid", side=R, mode="clip", clip_len=clip_len, frame_stride=args.frame_stride, n_traj=8, stats=tr.stats)
+    elif args.dataset == "typhoon":
+        from src.data.typhoon import TyphoonDataset
+        PARAMS[:] = ["wind", "pressure"]
+        tr = TyphoonDataset("train", side=R, target="wind", mode="clip", clip_len=clip_len)
+        va = TyphoonDataset("valid", side=R, target="wind", mode="clip", clip_len=clip_len, stats=tr.stats)
     elif args.dataset == "flowbench":
         from src.data.flowbench import FlowBenchFPO
         PARAMS[:] = ["Strouhal"]
@@ -159,18 +178,18 @@ def main():
         va = FlowBenchFPO("valid", side=R, mode="clip", clip_len=clip_len, frame_stride=args.frame_stride, stats=tr.stats)
     else:
         tr = ShearFlowClipDataset("train", n_seed=args.n_seed, frame_stride=args.frame_stride,
-                                  clip_len=clip_len, side=R)
-        va = ShearFlowClipDataset("valid", n_seed=8, frame_stride=args.frame_stride,
-                                  clip_len=clip_len, side=R, stats=tr.stats)
+                                  clip_len=clip_len, side=side_arg)
+        va = ShearFlowClipDataset("valid", n_seed=args.n_seed, frame_stride=args.frame_stride,
+                                  clip_len=clip_len, side=side_arg, stats=tr.stats)
     print(f"  dataset={args.dataset} in_chans={in_chans}  train {len(tr)} valid {len(va)}", flush=True)
     loader = DataLoader(tr, batch_size=args.batch, shuffle=True, drop_last=True,
                         num_workers=4, pin_memory=True)
-    coords = make_coords_2d(n_side=R, device=DEVICE)
+    coords = make_coords_2d_hw(RH, RW, device=DEVICE)             # non-square aware (RH=RW for square)
     DS = 64; coords_d = make_coords_2d(n_side=DS, device=DEVICE)   # dense grid for grad/fft spectral losses
 
-    model = FAE(emb_dim=args.emb_dim, num_iter=args.num_iter, depth_per_iter=4,
-                num_latents=args.num_latents, num_cross_heads=4, num_self_heads=8,
-                n_freq=32, max_freq=32, coord_dim=2, in_chans=in_chans).to(DEVICE)
+    model = FAE(emb_dim=args.emb_dim, num_iter=args.num_iter, depth_per_iter=args.depth_per_iter,
+                num_latents=args.num_latents, num_cross_heads=args.num_cross_heads, num_self_heads=args.num_self_heads,
+                n_freq=args.n_freq, max_freq=args.max_freq, coord_dim=2, in_chans=in_chans).to(DEVICE)
     npar = sum(p.numel() for p in model.parameters()) / 1e6
     print(f"  num_latents={args.num_latents} num_iter={args.num_iter} "
           f"params={npar:.2f}M", flush=True)
@@ -188,6 +207,17 @@ def main():
     sched = torch.optim.lr_scheduler.LambdaLR(opt, _lr)
     g0 = torch.Generator(device=DEVICE).manual_seed(0)
     probe_idx = torch.randperm(NPIX, generator=g0, device=DEVICE)[:1024]
+
+    def sensor_idx(n):
+        """Flat indices of n input sensors. 'discrete' = random scatter; 'continuous' = one
+        contiguous square block (realistic clustered sensors). Applies to the INPUT views only."""
+        if args.sensor_pattern == "continuous":
+            s = min(R, int(math.ceil(n ** 0.5)))
+            top = int(torch.randint(0, R - s + 1, (1,)).item()); left = int(torch.randint(0, R - s + 1, (1,)).item())
+            rows = (top + torch.arange(s, device=DEVICE)).view(s, 1)
+            cols = (left + torch.arange(s, device=DEVICE)).view(1, s)
+            return (rows * R + cols).flatten()[:n]
+        return torch.randperm(NPIX, device=DEVICE)[:n]
     t0 = time.time()
     for ep in range(args.epochs):
         model.train()
@@ -205,7 +235,7 @@ def main():
             else:
                 fa = clip[:, :, 0]; fb = fa; dt = None
             nA = (np.random.randint(args.mcnt_range[0], args.mcnt_range[1] + 1) if args.mcnt_range else int(np.random.choice(args.mcnt)))
-            iA = torch.randperm(NPIX, device=DEVICE)[:nA]
+            iA = sensor_idx(nA)
             iq = torch.randperm(NPIX, device=DEVICE)[:args.n_query]
             tgt_t = fields_to_tokens(fa, iq); tgt_f = fields_to_tokens(fb, iq)
             tA = model.encode_tokens(fields_to_tokens(fa, iA), coords[iA])   # latent of INPUT x_t (probed)
@@ -231,17 +261,21 @@ def main():
             if do_future:                                           # future-field recon (non-collapsible)
                 lf = F.mse_loss(model.decoder(tdec, coords[iq]), tgt_f); loss = loss + lf; l_rec = l_rec + lf
             if args.mode == "siam":                                 # invariance via latent-match (no VICReg)
-                nB = (np.random.randint(args.mcnt_range[0], args.mcnt_range[1] + 1) if args.mcnt_range else int(np.random.choice(args.mcnt))); iB = torch.randperm(NPIX, device=DEVICE)[:nB]
+                nB = (np.random.randint(args.mcnt_range[0], args.mcnt_range[1] + 1) if args.mcnt_range else int(np.random.choice(args.mcnt))); iB = sensor_idx(nB)
                 Lb = model.encode_tokens(fields_to_tokens(fb, iB), coords[iB]).detach()   # diff view of future
                 loss = loss + args.lam_match * F.mse_loss(tdec, Lb)
             if args.mode == "twoview":                              # invariance via SHARED recon target
-                nB = (np.random.randint(args.mcnt_range[0], args.mcnt_range[1] + 1) if args.mcnt_range else int(np.random.choice(args.mcnt))); iB = torch.randperm(NPIX, device=DEVICE)[:nB]
+                nB = (np.random.randint(args.mcnt_range[0], args.mcnt_range[1] + 1) if args.mcnt_range else int(np.random.choice(args.mcnt))); iB = sensor_idx(nB)
                 tB = model.encode_tokens(fields_to_tokens(fa, iB), coords[iB])            # 2nd view of x_t
                 loss = loss + F.mse_loss(model.decoder(tB, coords[iq]), tgt_t)
                 loss = loss + F.mse_loss(model.decoder(predictor(tB, dt), coords[iq]), tgt_f)
+            if args.mode == "twoview_present":                      # ABLATION: invariance-only (no temporal)
+                nB = (np.random.randint(args.mcnt_range[0], args.mcnt_range[1] + 1) if args.mcnt_range else int(np.random.choice(args.mcnt))); iB = sensor_idx(nB)
+                tB = model.encode_tokens(fields_to_tokens(fa, iB), coords[iB])            # 2nd view of x_t
+                loss = loss + F.mse_loss(model.decoder(tB, coords[iq]), tgt_t)            # shared PRESENT target
             if use_vic:
                 nB = (np.random.randint(args.mcnt_range[0], args.mcnt_range[1] + 1) if args.mcnt_range else int(np.random.choice(args.mcnt)))
-                iB = torch.randperm(NPIX, device=DEVICE)[:nB]
+                iB = sensor_idx(nB)
                 tB = model.encode_tokens(fields_to_tokens(fa, iB), coords[iB])
                 l_sim, l_std, l_cov = vicreg(proj, model.represent(tA), model.represent(tB), B)
                 loss = loss + args.sim * l_sim + args.std * l_std + args.cov * l_cov
@@ -259,7 +293,7 @@ def main():
             print(f"ep {ep+1:3d}/{args.epochs}  rec={ag['rec']/ag['n']:.3e}  PR={pr:.1f}  "
                   f"mean+std {psms} | mean {psm}  peakVRAM={vram:.1f}GB  ({time.time()-t0:.0f}s)", flush=True)
     if args.save:
-        out = f"results/checkpoints/g1/faep_{args.mode}_{args.tag}.pt"
+        out = args.ckpt_out or f"results/checkpoints/g1/faep_{args.mode}_{args.tag}.pt"
         os.makedirs(os.path.dirname(out), exist_ok=True)
         ckpt = {"model": model.state_dict(), "stats": tr.stats, "train_args": vars(args)}
         if predictor is not None:

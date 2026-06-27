@@ -11,6 +11,7 @@ depth_per_iter: 5         # -> 7.49M encoder, matched to MAE/JEPA 7.54M
 # OR mcnt: [discrete list]. Random-range exposes the encoder to ALL sparsities, not just a few.
 mcnt_range: [64, 1024]
 # mcnt: [64, 128, 256, 512]
+sensor_pattern: discrete # 'discrete' random scatter (default) | 'continuous' contiguous block
 dt_max: 1                # max temporal gap for the predictor
 tag: fae_ns128
 lr: 5.0e-4

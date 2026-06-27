@@ -1,0 +1,9 @@
+method: mae
+patch_size: 8            # res 128 -> 16x16 = 256 patch tokens
+depth: 6
+num_heads: 8
+mask_ratio: 0.75
+tag: mae_typhoon128
+lr: 1.5e-4
+weight_decay: 0.05
+betas: [0.9, 0.95]

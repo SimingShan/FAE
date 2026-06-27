@@ -1,0 +1,14 @@
+# Exp-1 training-time sensor config: DISCRETE scatter, FIXED 1024 sensors (dense).
+# Tests whether training only on dense input collapses the sparse-regime probe.
+method: fae
+mode: twoview
+num_latents: 128
+num_iter: 4
+depth_per_iter: 5
+mcnt: [1024]
+sensor_pattern: discrete
+dt_max: 1
+tag: fae_disc1024
+lr: 5.0e-4
+weight_decay: 1.0e-4
+betas: [0.9, 0.999]

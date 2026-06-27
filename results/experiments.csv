@@ -7,3 +7,22 @@ auto,2026-06-23,probe,mae_s2,ns,128,patch8,320,,,200,1,,R2_buoy,0.9236,,-0.423,m
 HEADLINE,2026-06-23,probe,mae,ns,128,patch8,320,,,200,3,,R2_buoy,0.9164,0.0095,-0.423,,,valid,git=fd72df6 enc=7.5M
 auto,2026-06-23,probe,jepa_s2,ns,128,patch8,320,,,200,1,,R2_buoy,0.7131,,-0.423,ijepa_ns128_s2.pt,fd72df6,auto,PR=46.5
 HEADLINE,2026-06-23,probe,jepa,ns,128,patch8,320,,,200,3,,R2_buoy,0.701,0.0564,-0.423,,,valid,git=fd72df6 enc=7.5M
+auto,2026-06-24,probe,fae_s0,ns,128,twoview,320,,,200,1,,R2_buoy,0.9195,,-0.423,faep_twoview_ns128_s0.pt,fd72df6,auto,PR=2.9
+auto,2026-06-24,probe,fae_s1,ns,128,twoview,320,,,200,1,,R2_buoy,0.9294,,-0.423,faep_twoview_ns128_s1.pt,fd72df6,auto,PR=2.8
+auto,2026-06-24,probe,fae_s2,ns,128,twoview,320,,,200,1,,R2_buoy,0.9289,,-0.423,faep_twoview_ns128_s2.pt,fd72df6,auto,PR=2.8
+HEADLINE,2026-06-24,probe,fae,ns,128,twoview,320,,,200,3,,R2_buoy,0.9259,0.0045,-0.423,,,valid,git=fd72df6 enc=7.5M
+HEADLINE,2026-06-24,probe,FAE-twoview,ns,128,mean-pool linear probe valid->test,320,,,200,3,3952,R2_buoy,0.929,0.005,-0.423,,,FINAL,git=7f3358d fair-by-construction matched 7.5M PR=3.9
+HEADLINE,2026-06-24,probe,MAE,ns,128,mean-pool linear probe valid->test,320,,,200,3,3952,R2_buoy,0.905,0.009,-0.423,,,FINAL,git=7f3358d fair-by-construction matched 7.5M PR=3.1
+HEADLINE,2026-06-24,probe,JEPA,ns,128,mean-pool linear probe valid->test,320,,,200,3,3952,R2_buoy,0.656,0.057,-0.423,,,FINAL,git=7f3358d fair-by-construction matched 7.5M PR=47.6
+auto,2026-06-24,probe,fae_s0,ns,128,recon,320,,,200,1,,R2_buoy,0.8688,,-0.423,faep_recon_FAE_no_dual_no_temp_s0.pt,7f3358d,auto,PR=4.3
+auto,2026-06-24,probe,fae_s0,ns,128,recon_both,320,,,200,1,,R2_buoy,0.9273,,-0.423,faep_recon_both_FAE_no_dual_temp_s0.pt,7f3358d,auto,PR=4.2
+auto,2026-06-25,probe,fae_s0,ns,128,twoview_present,320,,,200,1,,R2_buoy,0.8745,,-0.423,faep_twoview_present_FAE_dual_no_temp_s0.pt,7f3358d,auto,PR=3.6
+auto,2026-06-25,probe,fae_s1,ns,128,recon,320,,,200,1,,R2_buoy,0.8811,,-0.423,faep_recon_FAE_no_dual_no_temp_s1.pt,7f3358d,auto,PR=3.8
+auto,2026-06-25,probe,fae_s1,ns,128,recon_both,320,,,200,1,,R2_buoy,0.9318,,-0.423,faep_recon_both_FAE_no_dual_temp_s1.pt,7f3358d,auto,PR=3.9
+auto,2026-06-25,probe,fae_s2,ns,128,recon,320,,,200,1,,R2_buoy,0.8616,,-0.423,faep_recon_FAE_no_dual_no_temp_s2.pt,7f3358d,auto,PR=3.4
+HEADLINE,2026-06-25,probe,fae,ns,128,recon,320,,,200,3,,R2_buoy,0.8705,0.0081,-0.423,,,valid,git=7f3358d enc=7.5M
+auto,2026-06-25,probe,fae_s2,ns,128,recon_both,320,,,200,1,,R2_buoy,0.925,,-0.423,faep_recon_both_FAE_no_dual_temp_s2.pt,7f3358d,auto,PR=3.9
+HEADLINE,2026-06-25,probe,fae,ns,128,recon_both,320,,,200,3,,R2_buoy,0.928,0.0028,-0.423,,,valid,git=7f3358d enc=7.5M
+auto,2026-06-25,probe,fae_s1,ns,128,twoview_present,320,,,200,1,,R2_buoy,0.887,,-0.423,faep_twoview_present_FAE_dual_no_temp_s1.pt,7f3358d,auto,PR=3.4
+auto,2026-06-25,probe,fae_s2,ns,128,twoview_present,320,,,200,1,,R2_buoy,0.8728,,-0.423,faep_twoview_present_FAE_dual_no_temp_s2.pt,7f3358d,auto,PR=3.4
+HEADLINE,2026-06-25,probe,fae,ns,128,twoview_present,320,,,200,3,,R2_buoy,0.8781,0.0064,-0.423,,,valid,git=7f3358d enc=7.5M

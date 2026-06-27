@@ -1,0 +1,3 @@
+# RAE with frozen fae encoder: diffuse IN its latent (decoded by the trained coordinate decoder).
+encoder: fae
+tag: rae_fae

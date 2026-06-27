@@ -1,0 +1,5 @@
+# Reverse REPA (principled): frozen FAE encoder pooling + a tiny trainable value-adapter; SiT patch
+# tokens placed at their patch-center coords, encoded by the FROZEN FAE -> 128 set tokens, aligned
+# (centered) to the clean field's FAE latent. No cheat path (frozen pooling), coord-grounded.
+align: fae_set2
+tag: gen_fae_set2

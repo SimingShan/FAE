@@ -122,8 +122,9 @@ def main():
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--tag", default="v1")
-    ap.add_argument("--dataset", choices=["shear", "flowbench", "ns"], default="shear")
-    ap.add_argument("--in_chans", type=int, default=None, help="default 4 (shear) / 3 (flowbench,ns)")
+    ap.add_argument("--ckpt_out", default=None, help="explicit checkpoint path (runner sets the organized path); else legacy g1/")
+    ap.add_argument("--dataset", choices=["shear", "flowbench", "ns", "typhoon"], default="shear")
+    ap.add_argument("--in_chans", type=int, default=None, help="default 4 (shear) / 3 (flowbench,ns) / 1 (typhoon)")
     ap.add_argument("--norm_pix", action="store_true", help="MAE per-patch normalized target (Kaiming best)")
     ap.add_argument("--embed_dim", type=int, default=None, help="ViT width override (match FAE: 320)")
     ap.add_argument("--depth", type=int, default=None, help="ViT depth override")
@@ -143,13 +144,19 @@ def main():
     print(f"=== {args.method.upper()} shear_flow [{args.tag}]  res={args.resolution} batch={args.batch} "
           f"epochs={args.epochs} lr={lr:.1e} wd={wd} amp={args.amp} ===", flush=True)
 
-    in_chans = args.in_chans if args.in_chans is not None else (3 if args.dataset in ("flowbench", "ns") else 4)
+    in_chans = args.in_chans if args.in_chans is not None else (1 if args.dataset == "typhoon" else 3 if args.dataset in ("flowbench", "ns") else 4)
     if args.dataset == "ns":
         from src.data.ns import NSDataset
         PARAMS[:] = ["buoyancy"]
         mode = "clip" if args.method in ("videomae", "stjepa") else "single"
         tr = NSDataset("train", side=args.resolution, mode=mode, clip_len=max(args.n_frames, 2), frame_stride=args.frame_stride, n_traj=args.n_traj)
         va = NSDataset("valid", side=args.resolution, mode=mode, clip_len=max(args.n_frames, 2), frame_stride=args.frame_stride, n_traj=8, stats=tr.stats)
+    elif args.dataset == "typhoon":
+        from src.data.typhoon import TyphoonDataset
+        PARAMS[:] = ["wind", "pressure"]
+        mode = "clip" if args.method in ("videomae", "stjepa") else "single"
+        tr = TyphoonDataset("train", side=args.resolution, target="wind", mode=mode, clip_len=max(args.n_frames, 2))
+        va = TyphoonDataset("valid", side=args.resolution, target="wind", mode=mode, clip_len=max(args.n_frames, 2), stats=tr.stats)
     elif args.dataset == "flowbench":
         from src.data.flowbench import FlowBenchFPO
         PARAMS[:] = ["Strouhal"]
@@ -208,7 +215,7 @@ def main():
             print(f"ep {ep+1:3d}/{args.epochs}  loss={run/n:.4e}  PR={pr:.1f}  "
                   f"probe {ps}  ({time.time()-t0:.0f}s)", flush=True)
 
-    out = f"results/checkpoints/g1/{args.method}_{args.tag}.pt"
+    out = args.ckpt_out or f"results/checkpoints/g1/{args.method}_{args.tag}.pt"
     os.makedirs(os.path.dirname(out), exist_ok=True)
     torch.save({"model": model.state_dict(), "stats": tr.stats, "train_args": vars(args)}, out)
     Ztr, Ytr = embed(model, tr); Zva, Yva = embed(model, va)

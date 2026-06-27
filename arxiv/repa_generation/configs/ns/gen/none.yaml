@@ -1,0 +1,3 @@
+# Pixel-DiT benchmark: NO representation alignment (the control).
+align: none
+tag: gen_none

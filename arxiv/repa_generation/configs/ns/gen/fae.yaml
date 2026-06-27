@@ -1,0 +1,3 @@
+# REPA align SiT tokens to frozen FAE per-patch features (ours).
+align: fae
+tag: gen_fae

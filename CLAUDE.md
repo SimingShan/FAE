@@ -2,35 +2,31 @@
 
 Read `docs/STRUCTURE.md` first (repo layout + how to run). This file is the working brief.
 
-## Current focus — TWO evaluation categories (everything else is in `arxiv/`)
+## Current focus — THREE latent-space jobs from SPARSE observations (mentor pivot, 2026-06-25)
 
-Encoders pretrained on **2D PDE fields from The Well**, evaluated two ways. The encoders under
-comparison are the same in both categories:
+The paper: **whatever pixel-space methods do directly, FAE does in latent space from sparse/irregular
+observations** — ONE frozen encoder, three queries: **forecast · reconstruct · invert**. Disciplines
+(non-negotiable): (1) **freeze the encoder once** — each task a lightweight head, the freeze IS the
+evidence; (2) **two baselines per task** — interpolate-sparse→grid→pixel-operator (*architecture axis*)
+and latent-operator-from-scratch / no-SSL (*representation axis*); (3) **sparse regime**, x-axis on every
+plot = error vs sensor count (& vs #labels), withhold the full field (score only). Anchor reference =
+**L-DeepONet** (Karniadakis, `external/latent-deeponet`) — the grid-AE latent operator we EXTEND to the
+sparse regime; reimplement it in-harness as the architecture-axis baseline. See memory
+`mentor-three-jobs-pivot`. **REPA generation is ARCHIVED** → `arxiv/repa_generation/` (next paper; footnote:
+Reverse-REPA ≈ MAE). Encoders compared (same set across jobs):
 
 | encoder | paradigm | where |
 |---|---|---|
 | **FAE** (ours) | functional / coordinate, dual-view temporal | `src/models/fae.py`, `scripts/train_fae.py` (`--mode twoview` default) |
 | **MAE** | masked reconstruction | `benchmarks/mae/mae.py` (Kaiming port), `scripts/train_baseline.py` |
 | **JEPA** (I-JEPA) | latent prediction | `benchmarks/jepa/ijepa2d.py`, `scripts/train_baseline.py` |
-| **VICReg** (their SSLForPDEs) | invariance | *probe-only baseline, archived* `arxiv/pre_repa_pivot/scripts/train_vicreg_fpo.py` — wire back if needed for generation |
+| **VICReg** (their SSLForPDEs) | invariance | *probe-only baseline, archived* `arxiv/pre_repa_pivot/scripts/train_vicreg_fpo.py` |
 
-Generation benchmarks (`--align mae/jepa`) = MAE + JEPA only; both built/trained via `scripts/train_baseline.py` (`--method {mae,ijepa}`).
-
-### Category 1 — REPA generation  (`scripts/generate.py`)
-Pixel-space SiT flow-matching on PDE fields, **NO VAE**; REPA aligns SiT tokens to a frozen encoder's
-per-patch features (`--align {none,fae,mae,jepa}`, `none` = pixel-DiT benchmark). Three modes:
-- `uncond` — unconditional. metric `spectrum_dist`.
-- `param` — physical parameter as a class → LabelEmbedder + AdaLN + **CFG** (REPA's class mechanism;
-  NOT channel-concat). metric `spectrum_dist`.
-- `sparse` — **FAE encodes scattered sensors → dense field guess → DiT refines** (ViTs can't ingest
-  scattered points). metric `recon_relL2` + `spectrum_dist`. **This is the FAE-necessary regime.**
-
-Core question: *which encoder is the best REPA target for PDE generation, and where is FAE necessary
-(not merely preferable)?*
-
-### Category 2 — Linear probe  (`scripts/eval_linear_probe.py`, `eval_ns_probe.py`)
-Frozen embedding → ridge probe of physical parameters → R² and **MSE on standardized labels**
-(paper Table-1 standard; trivial predictor → MSE 1.0), plus **participation ratio** (collapse guard).
+### Job 3 (inverse) foundation — Linear probe  (`scripts/eval_linear_probe.py`, `eval_ns_probe.py`)
+Frozen embedding → ridge probe of physical **properties** (shear `logRe/logSc`; typhoon `wind/pressure`) —
+estimate a property, **NOT** a sim INPUT like buoyancy. R² / **MSE on standardized labels** + **participation
+ratio**. The sparse-obs version + the two baselines + the sensor-count/label-efficiency curve = the inverse
+job. Trivial/random floor FIRST, always.
 
 ## Benchmarks
 - **shear_flow** — THE benchmark. 4-ch [tracer, pressure, vx, vy]; probe `logRe, logSc`. Trivial

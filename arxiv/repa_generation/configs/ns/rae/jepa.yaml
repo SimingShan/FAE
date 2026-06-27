@@ -1,0 +1,3 @@
+# RAE with frozen jepa encoder: diffuse IN its latent (decoded by the trained coordinate decoder).
+encoder: jepa
+tag: rae_jepa

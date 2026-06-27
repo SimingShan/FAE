@@ -1,0 +1,5 @@
+# Reverse REPA: align the SiT's features in FAE's SET space (the DiT speaks FAE's language),
+# not on a grid. A trainable cross-attention adapter uses FAE's frozen learned latents as queries
+# to pool the SiT's per-patch tokens into 128 set tokens, aligned to the clean field's FAE latent.
+align: fae_set
+tag: gen_fae_set

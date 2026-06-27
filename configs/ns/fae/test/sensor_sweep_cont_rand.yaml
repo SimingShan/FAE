@@ -1,0 +1,13 @@
+# Exp-1 training-time sensor config: CONTINUOUS block, RANDOM count in [64,1024] (clustered, all sparsities).
+method: fae
+mode: twoview
+num_latents: 128
+num_iter: 4
+depth_per_iter: 5
+mcnt_range: [64, 1024]
+sensor_pattern: continuous
+dt_max: 1
+tag: fae_contrand
+lr: 5.0e-4
+weight_decay: 1.0e-4
+betas: [0.9, 0.999]

@@ -1,0 +1,39 @@
+# ====================================================================================
+# SHARED RAE BUDGET — every RAE variant (fae/mae/jepa) inherits this (found by walk-up).
+# A variant may set ONLY {encoder, tag}; everything below is loader-protected (fair by construction).
+# RAE = frozen encoder + trained coordinate decoder (stage 1), then flow-matching IN the latent (stage 2).
+# ====================================================================================
+dataset: ns
+resolution: 128
+in_chans: 3
+
+# frozen encoders (seed-0 checkpoints under results/checkpoints/ns/<method>/)
+fae_tag: fae_ns128
+mae_tag: mae_ns128
+jepa_tag: jepa_ns128
+
+# ---- stage 1: train the UNIFORM coordinate decoder (encoder frozen) ----
+s1_epochs: 80
+s1_batch: 32
+s1_lr: 1.0e-4
+lam_spec: 0.1            # spectral/gradient sharpener (physics-native; fluids have sharp fronts)
+gan_start: 10            # warm up recon for N epochs, THEN switch on the PatchGAN (sharpness)
+disc_lr: 1.0e-4
+n_query: 4096            # decode-query coords per step
+
+# ---- stage 2: latent flow-matching DiT (diffuse IN the frozen latent) ----
+dit_depth: 8
+dit_heads: 8
+s2_epochs: 150
+s2_batch: 64
+s2_lr: 1.0e-4
+steps: 50               # sampler ODE steps
+
+# ---- eval: rFID (decoder ceiling) AND gFID (latent diffusability), reported separately ----
+n_samples: 2048
+eval_split: valid
+gen_n_traj: 12
+
+seeds: [0, 1, 2]
+seed: 0
+ckpt_dir: results/checkpoints

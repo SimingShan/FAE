@@ -47,6 +47,14 @@ def make_coords_2d(n_side: int = 224, device="cpu") -> torch.Tensor:
     return torch.stack([gi.flatten(), gj.flatten()], dim=-1)
 
 
+def make_coords_2d_hw(H: int, W: int, device="cpu") -> torch.Tensor:
+    """(H*W, 2) grid in [0,1]^2 for NON-SQUARE fields; flat index k = i*W + j -> (i, j)."""
+    gi = torch.linspace(0.0, 1.0, H, device=device)
+    gj = torch.linspace(0.0, 1.0, W, device=device)
+    ii, jj = torch.meshgrid(gi, gj, indexing="ij")
+    return torch.stack([ii.flatten(), jj.flatten()], dim=-1)
+
+
 def make_coords_3d(n_frames: int, n_side: int = 224, device="cpu") -> torch.Tensor:
     """(n_frames*n_side*n_side, 3) grid in [0, 1], flat index = t*HW + i*n_side + j."""
     t = torch.linspace(0.0, 1.0, n_frames, device=device)
@@ -96,16 +104,17 @@ def _split_files(split: str):
     return files
 
 
-def _resize(x: np.ndarray, side: int) -> np.ndarray:
-    """(M, C, H, W) float32 -> (M, C, side, side) via bilinear interpolation.
+def _resize(x: np.ndarray, side) -> np.ndarray:
+    """(M, C, H, W) float32 -> (M, C, h, w). ``side`` is an int (square) OR an (h, w) tuple.
 
-    shear_flow is 256x512 (1:2 aspect); a square ``side`` resize squishes the y
-    axis — intentional, every method sees the same square grid.
+    shear_flow is 256x512 (1:2 aspect); a square ``side`` squishes the y axis (fair square grid for
+    every method); an (h, w) tuple PRESERVES the native aspect (FAE-only, coordinate-native).
     """
-    if x.shape[-2:] == (side, side):
+    hw = (side, side) if isinstance(side, int) else tuple(side)
+    if x.shape[-2:] == hw:
         return x
     t = torch.from_numpy(x)
-    t = F.interpolate(t, size=(side, side), mode="bilinear", align_corners=False)
+    t = F.interpolate(t, size=hw, mode="bilinear", align_corners=False)
     return t.numpy()
 
 
@@ -281,9 +290,10 @@ class ShearFlowClipDataset(_ShearFlowBase):
     ``frame_stride`` apart; the trainer samples a pair ``(t0, t0+Δ)`` and a gap Δ
     INSIDE the loop, so one dataset serves the whole horizon distribution.
     """
-    def __init__(self, split, n_seed=24, frame_stride=4, clip_len=8, side=224, stats=None):
-        super().__init__()
+    def __init__(self, split, n_seed=24, frame_stride=4, clip_len=8, side=224, stats=None, traj_parity=None):
+        super().__init__()                                               # traj_parity 0/1 -> disjoint trajectory halves
         import h5py
+        rh, rw = (side, side) if isinstance(side, int) else side          # (h, w) tuple -> native-aspect, else square
         c_list, re_list, sc_list = [], [], []
         for path in _split_files(split):
             with h5py.File(path, "r") as h:
@@ -300,8 +310,11 @@ class ShearFlowClipDataset(_ShearFlowBase):
             fields = fields[:, :ncl * clip_len]
             H, W = fields.shape[-2:]
             fields = _resize(fields.reshape(-1, 4, H, W).astype(np.float32), side)
-            fields = fields.reshape(nt * ncl, clip_len, 4, side, side)
-            clips = fields.transpose(0, 2, 1, 3, 4)                          # (N, 4, clip_len, side, side)
+            fields = fields.reshape(nt * ncl, clip_len, 4, rh, rw)
+            clips = fields.transpose(0, 2, 1, 3, 4)                          # (N, 4, clip_len, rh, rw)
+            if traj_parity is not None:                                      # trajectory-disjoint split (shear has no test dir)
+                keep = (np.arange(nt * ncl) // ncl) % 2 == traj_parity       # clip j -> trajectory j//ncl
+                clips = clips[keep]
             c_list.append(clips); m = clips.shape[0]
             re_list.append(np.full(m, np.log10(Re))); sc_list.append(np.full(m, Sc))
         self.clips = np.concatenate(c_list).astype(np.float32)

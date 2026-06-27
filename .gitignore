@@ -23,3 +23,5 @@ wandb/
 .DS_Store
 # external clones (cloned per docs/MIGRATION.md): MAE, JEPA harness, ijepa, the_well
 external/
+results/figs/
+results/figures/

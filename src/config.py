@@ -11,10 +11,12 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # keys a method_data.yaml is FORBIDDEN to set (they come from base.yaml — keeps comparisons fair)
 # keys a method_data.yaml is FORBIDDEN to set (must match for fairness). lr/weight_decay/betas are
 # METHOD-LEVEL (each method uses its own appropriate recipe) so they are NOT here.
-SHARED = ["dataset", "resolution", "in_chans", "n_traj", "frame_stride", "epochs", "batch",
+SHARED = ["dataset", "resolution", "in_chans", "n_traj", "n_seed", "frame_stride", "epochs", "batch",
           "seed", "amp", "emb_dim", "param_budget_M", "param_tol_M", "warmup_frac", "scheduler",
           "eval_probe", "eval_split", "eval_pool", "ridge_alphas", "eval_fae_full_grid",
           "eval_n_sensors", "eval_n_traj", "ckpt_dir"]
+# NOTE: `mode` is FAE's objective knob (method-specific), NOT shared. The old REPA-gen / RAE shared
+# keys were removed when those lines were archived (arxiv/repa_generation/).
 
 
 def git_hash():
@@ -25,16 +27,38 @@ def git_hash():
 
 
 def load_config(path):
-    base = OmegaConf.load(os.path.join(ROOT, "configs", "base.yaml"))
+    # tree: configs/<dataset>/<method>/[<group>/]<setup>.yaml  +  configs/<dataset>/base.yaml (shared budget).
+    # base.yaml is found by walking UP from the config -> any nesting depth (method/, method/group/...) works.
     p = path if os.path.isabs(path) else os.path.join(ROOT, path)
+    d = os.path.dirname(p); base_path = None
+    while d and d != os.path.dirname(d):
+        cand = os.path.join(d, "base.yaml")
+        if os.path.exists(cand) and os.path.abspath(cand) != os.path.abspath(p):
+            base_path = cand; break
+        d = os.path.dirname(d)
+    if base_path is None:
+        raise FileNotFoundError(f"no base.yaml found above {path}")
+    base = OmegaConf.load(base_path)
     cfg = OmegaConf.load(p)
     bad = [k for k in cfg.keys() if k in SHARED]
     if bad:
-        raise ValueError(f"{path} sets SHARED-budget key(s) {bad} — forbidden. Change them in configs/base.yaml.")
+        raise ValueError(f"{path} sets SHARED-budget key(s) {bad} — forbidden. Change them in the dataset base.yaml.")
     merged = OmegaConf.merge(base, cfg)
     merged.git = git_hash()
-    merged.ckpt = f"{merged.ckpt_dir}/{merged.method}_{merged.dataset}{merged.resolution}_s{merged.seed}.pt"
+    if "method" in merged:                                   # encoder configs only; gen configs have no `method`
+        merged.ckpt = f"{merged.ckpt_dir}/{merged.method}_{merged.dataset}{merged.resolution}_s{merged.seed}.pt"
     return merged
+
+
+def ckpt_path(cfg, seed):
+    """Organized checkpoint path mirroring the config tree: <ckpt_dir>/<dataset>/<method>/<tag>_s<seed>.pt."""
+    return os.path.join(cfg.ckpt_dir, cfg.dataset, cfg.method, f"{cfg.tag}_s{seed}.pt")
+
+
+def ckpt_file(method, tag, seed, dataset="ns", ckpt_dir="results/checkpoints"):
+    """Resolve a checkpoint by (method, tag, seed) without a full cfg. ABSOLUTE path under ROOT.
+    Single source of truth for eval/viz scripts -> renames happen in ONE place."""
+    return os.path.join(ROOT, ckpt_dir, dataset, method, f"{tag}_s{seed}.pt")
 
 
 def encoder_params_M(cfg):
