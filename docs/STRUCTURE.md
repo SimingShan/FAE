@@ -1,47 +1,42 @@
-# Repo structure (post REPA-pivot reorg, 2026-06-20)
+# Repo structure (post cleanup, 2026-06-27)
 
-Prepared for inspection before the large experiment sweep. The repo now has **two evaluation
-categories** and nothing else in `scripts/`.
+The paper: **whatever pixel methods do directly, FAE does in latent space from sparse observations**
+— one frozen encoder (FAE vs MAE vs JEPA), evaluated by the figures in `scripts/eval/`.
 
-## Two evaluation categories
-
-### 1. REPA generation — `scripts/generate.py`
-Pixel-space SiT flow-matching on PDE fields (no VAE); REPA aligns the SiT tokens to a frozen encoder.
+## scripts/
 ```
-python scripts/generate.py --mode {uncond,param,sparse} --align {none,fae,mae,jepa} --dataset {ns,shear}
-```
-| `--mode` | conditioning | metric |
-|---|---|---|
-| `uncond` | none | `spectrum_dist` |
-| `param`  | physical parameter as a class → LabelEmbedder + AdaLN + **CFG** (REPA's class mechanism) | `spectrum_dist` |
-| `sparse` | **FAE encodes scattered sensors → dense field guess** (ViTs can't); DiT refines it | `recon_relL2` + `spectrum_dist` |
+gpu.slurm                         generic launcher: sbatch ... scripts/gpu.slurm python <script> <args>
 
-`--align`: `none` = pixel-DiT benchmark; `fae` = ours; `mae`/`jepa` = SSL benchmarks (need `--enc_ckpt`).
-The **sparse** mode is the one where the FAE is *necessary*, not merely preferable.
+train/                            PRETRAINING (the encoders)
+  train_fae.py                    FAE — modes: recon | recon_both | twoview_present | twoview (default)
+  train_baseline.py               MAE / I-JEPA (matched ~ViT; native-aspect for shear)
+  run.py                          config-driven harness: configs/<ds>/<method>/<setup>.yaml -> command
+  run_config.slurm
 
-### 2. Linear probe — `scripts/eval_linear_probe.py` (+ `eval_ns_probe.py`)
-Frozen encoder → ridge probe of physical parameters, with the trivial-baseline floor (CLAUDE.md rule #1).
+eval/                             PRETRAINING EVAL (these figures = all encoder-side eval)
+  probe_all.py                    canonical linear probe (src.eval: mean-pool, RidgeCV, valid->test, PR, floor)
+  sweep_sensors.py                producer: probe-R2 + ICC vs #sensors (endpoint == dense probe, asserted)
+  fig1_recon  fig2_training  fig3_probe_sensors  fig4_icc_sensors  fig5_ablation
+  icc_encoders (FAE/MAE/JEPA ICC)  fig_interp_input (what the ViTs ingest)
 
-## Encoders (targets for both categories)
-- `scripts/train_fae.py` — FAE. **Default `--mode twoview` = dual-view temporal** (two sparsity views,
-  shared recon targets, + future prediction). Saves by default (`--no-save` to skip).
-- `scripts/train_baseline.py` — MAE / JEPA / VICReg, `--dataset {shear,flowbench,ns}`.
+L_forecast/                       DOWNSTREAM forecast job (L-DeepONet extension; separate phase)
+  train_forecast · train_grid_ae · train_pixel_deeponet · train_fno · viz_* · gen_sw · merge_sw · viz_sw*
 
-## Layout
-```
-scripts/   generate.py · eval_linear_probe.py · eval_ns_probe.py · train_fae.py · train_baseline.py
-           viz_generate.py · download_ns.py
-src/       models/fae.py · data/{well2d,ns,flowbench}.py · metrics/probes.py · utils/seed.py
-benchmarks/ mae/mae.py · jepa/ijepa2d.py
-arxiv/pre_repa_pivot/   ~80 archived files (rollout, flowbench, diagnostics, one-off evals,
-                        superseded trainers, gen_dit/gen_dit_param now folded into generate.py)
+data/                             download_ns · prep_typhoon · download_*.slurm
 ```
 
-## What was archived (for inspection, in `arxiv/pre_repa_pivot/`)
-- **Rollout / spatio-temporal generation** (Lu: not a convincing application): `rollout_*`, `gen_dit_cond`,
-  `gen_dit_st`, `viz_dit_{cond,st}`, `src/cond_unet/`.
-- **FlowBench side-experiment**: `eval_flowbench_*`, `viz_flowbench_gif`, `viz_fpo_recon`.
-- **Diagnostics / one-off evals**: `diag_*`, `eval_ns_{diag,floor,theirs,residual}`, `eval_{attentive,battery,
-  recon,residual,tsne,views,readout,lowshot,pod_rank,probe_density,rb_floor,shear_perchannel}*`.
-- **Superseded trainers**: `train_fae_{shear,trl2d}`, `train_fjepa`, `train_supervised`, `train_vicreg_fpo`,
-  `models/fjepa.py`, `mae/videomae.py`, `jepa/stjepa.py`; all old `run_*.slurm`.
+## src/ · benchmarks/
+```
+src/   models/fae.py · data/{well2d,ns,typhoon,flowbench}.py · metrics/probes.py · eval.py · plotstyle.py
+       (L-DeepONet modules: deeponet.py · fno.py · grid_ae.py · latent_op.py)
+benchmarks/ mae/mae.py · jepa/ijepa2d.py   (rectangular-aware; MAE/JEPA both square + 128x256)
+```
+
+## Rules (each cost real time)
+1. **Probe = `src.eval`** (one canonical procedure); never reimplement. Trivial floor FIRST. PR = collapse guard.
+2. **Nothing hardcoded** — every knob flows config -> run.py cmd -> trainer.
+3. **Sensor sweep**: full-grid endpoint MUST equal the dense probe (asserted); test split shares fit stats.
+4. **Param/geometry matched** by construction; shear is native 128x256 for ALL encoders (fair).
+
+`results/`, checkpoints, data, figures are gitignored (regenerate). `arxiv/superseded/` = cleaned-out
+scripts (reimplemented probes, old viz, broken REPA evals); `arxiv/{pre_repa_pivot,repa_generation}/` = prior phases.

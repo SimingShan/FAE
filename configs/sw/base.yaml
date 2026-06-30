@@ -1,0 +1,46 @@
+# SHARED budget for shallow-water (L-DeepONet generator) — every method inherits.
+# Data is PREPROCESSED once into data/sw/ (scripts/data/preprocess.py); meta.json is authoritative
+# for resolution/channels/dt_max/labels — fields below are the campaign spec / documentation.
+dataset: sw
+resolution: 128          # 128^2 (down from native 256^2)
+in_chans: 1              # vorticity
+n_traj: 135              # train trajectories (held-out (alpha,beta) split: 135 train / 15 test = 9:1)
+frame_stride: 1          # native cadence (72 frames/traj); SW decorrelates fast -> keep all
+dt_max: 10               # decorrelation-set (corr(x_t,x_{t+10}) ~ 0.5); temporal sweep overrides to {1,5,10}
+
+# ---- training budget (identical across methods) ----
+epochs: 200              # fixed; no early stopping (loss-converge != probe-converge)
+batch: 64
+lr: 5.0e-4
+warmup_frac: 0.05
+scheduler: cosine
+weight_decay: 1.0e-4
+betas: [0.9, 0.999]
+amp: true
+seeds: [0]               # single-seed first pass; add [0,1,2] for headline rigor
+seed: 0
+emb_dim: 320
+param_budget_M: 7.0
+param_tol_M: 1.0
+
+# ---- evaluation (frozen encoder -> ridge probe, train -> test, RidgeCV) ----
+eval_probe: alpha        # probe both (alpha, beta); interpolation to held-out (alpha,beta) values
+eval_split: train_to_test
+eval_pool: mean
+ridge_alphas: [1.0e-3, 1.0e-2, 1.0e-1, 1.0, 10.0, 100.0, 1.0e3]
+eval_fae_full_grid: true
+eval_n_sensors: 1024
+
+ckpt_dir: results/checkpoints
+
+# ---- trainer knobs (config-driven) ----
+num_cross_heads: 4
+num_self_heads: 8
+n_freq: 32
+max_freq: 32
+pred_depth: 2
+n_query: 1024
+dt_fixed: 0
+n_frames: 1
+ema_start: 0.996
+ema_end: 1.0

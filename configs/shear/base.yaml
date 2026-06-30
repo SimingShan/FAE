@@ -18,7 +18,7 @@ emb_dim: 320
 param_budget_M: 7.0
 param_tol_M: 1.5
 eval_probe: logRe
-eval_split: valid_to_test
+eval_split: train_to_test
 eval_pool: mean
 ridge_alphas: [1.0e-3, 1.0e-2, 1.0e-1, 1.0, 10.0, 100.0, 1.0e3]
 eval_fae_full_grid: true
@@ -43,5 +43,5 @@ tgt_frac: 0.06           # JEPA target fraction
 tubelet: 2               # JEPA temporal tubelet
 ema_start: 0.996         # JEPA EMA momentum start
 ema_end: 1.0             # JEPA EMA momentum end
-res_h: 128              # FAE native-aspect height (ViTs stay square 128)
-res_w: 256              # FAE native-aspect width (1:2) -> MAE must squish = its disadvantage
+res_h: 128              # native-aspect height — ALL encoders (FAE + ViTs) ingest 128x256 (fair-by-construction)
+res_w: 256              # native-aspect width (1:2); ViTs use rectangular patch grid 16x32 = 512 tokens

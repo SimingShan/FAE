@@ -45,10 +45,10 @@ def get_2d_sincos_pos_embed_from_grid(embed_dim, grid):
     return np.concatenate([emb_h, emb_w], axis=1)
 
 
-def get_2d_sincos_pos_embed(embed_dim, grid_size, cls_token=False):
-    grid_h = np.arange(grid_size, dtype=np.float32)
-    grid_w = np.arange(grid_size, dtype=np.float32)
-    grid = np.stack(np.meshgrid(grid_w, grid_h), axis=0).reshape([2, 1, grid_size, grid_size])
+def get_2d_sincos_pos_embed_rect(embed_dim, gh, gw, cls_token=False):
+    """Rectangular grid (gh x gw) version -> matches timm PatchEmbed row-major patch order."""
+    grid = np.stack(np.meshgrid(np.arange(gw, dtype=np.float32), np.arange(gh, dtype=np.float32)),
+                    axis=0).reshape([2, 1, gh, gw])
     pos_embed = get_2d_sincos_pos_embed_from_grid(embed_dim, grid)
     if cls_token:
         pos_embed = np.concatenate([np.zeros([1, embed_dim]), pos_embed], axis=0)
@@ -86,9 +86,10 @@ class MaskedAutoencoderViT(nn.Module):
         self.initialize_weights()
 
     def initialize_weights(self):
-        pos_embed = get_2d_sincos_pos_embed(self.pos_embed.shape[-1], int(self.patch_embed.num_patches ** .5), cls_token=True)
+        gh, gw = self.patch_embed.grid_size                      # (gh, gw) tuple; rectangular-aware
+        pos_embed = get_2d_sincos_pos_embed_rect(self.pos_embed.shape[-1], gh, gw, cls_token=True)
         self.pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
-        decoder_pos_embed = get_2d_sincos_pos_embed(self.decoder_pos_embed.shape[-1], int(self.patch_embed.num_patches ** .5), cls_token=True)
+        decoder_pos_embed = get_2d_sincos_pos_embed_rect(self.decoder_pos_embed.shape[-1], gh, gw, cls_token=True)
         self.decoder_pos_embed.data.copy_(torch.from_numpy(decoder_pos_embed).float().unsqueeze(0))
         w = self.patch_embed.proj.weight.data
         torch.nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
@@ -109,8 +110,8 @@ class MaskedAutoencoderViT(nn.Module):
         """(N, C, H, W) -> (N, L, p*p*C)."""
         p = self.patch_embed.patch_size[0]
         c = self.in_chans
-        assert imgs.shape[2] == imgs.shape[3] and imgs.shape[2] % p == 0
-        h = w = imgs.shape[2] // p
+        assert imgs.shape[2] % p == 0 and imgs.shape[3] % p == 0
+        h, w = imgs.shape[2] // p, imgs.shape[3] // p
         x = imgs.reshape(shape=(imgs.shape[0], c, h, p, w, p))
         x = torch.einsum('nchpwq->nhwpqc', x)
         return x.reshape(shape=(imgs.shape[0], h * w, p ** 2 * c))
@@ -119,11 +120,11 @@ class MaskedAutoencoderViT(nn.Module):
         """(N, L, p*p*C) -> (N, C, H, W)."""
         p = self.patch_embed.patch_size[0]
         c = self.in_chans
-        h = w = int(x.shape[1] ** .5)
+        h, w = self.patch_embed.grid_size
         assert h * w == x.shape[1]
         x = x.reshape(shape=(x.shape[0], h, w, p, p, c))
         x = torch.einsum('nhwpqc->nchpwq', x)
-        return x.reshape(shape=(x.shape[0], c, h * p, h * p))
+        return x.reshape(shape=(x.shape[0], c, h * p, w * p))
 
     def random_masking(self, x, mask_ratio):
         N, L, D = x.shape

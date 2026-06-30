@@ -138,6 +138,57 @@ def fourier_features(coords, n_freq, max_freq=32, geometric=False):
 
 
 # ----------------------------------------------------------------------
+# Local-neighbourhood token embedding (mini-PointNet, Point-MAE-style)
+# ----------------------------------------------------------------------
+@torch.no_grad()
+def knn_index(coords, k, chunk=4096):
+    """k nearest neighbours (incl. self) in coordinate space. coords (B,N,D) -> idx (B,N,k) long.
+    Chunked over queries to bound memory (full-grid N can be ~16k)."""
+    B, N, _ = coords.shape
+    k = min(k, N)
+    out = coords.new_empty(B, N, k, dtype=torch.long)
+    for s in range(0, N, chunk):
+        q = coords[:, s:s + chunk]                                   # (B, c, D)
+        d = torch.cdist(q, coords)                                   # (B, c, N)
+        out[:, s:s + chunk] = d.topk(k, dim=-1, largest=False).indices
+    return out
+
+
+class LocalGroupEmbed(nn.Module):
+    """Per-token local-neighbourhood feature, the Point-MAE `Encoder` (mini-PointNet) adapted to FAE:
+    NO FPS downsampling — every sensor token is its own group centre and gathers its k nearest
+    neighbours (in continuous coordinate space). The shared PointNet runs over
+    [relative-coord, neighbour-value] and max-pools -> one local feature per token.
+
+    This keeps the FAE functional/set property intact: it is permutation-invariant, operates on
+    relative coordinates (translation-equivariant, grid-free) and works for ANY point cardinality
+    or resolution — it just gives each input token a small local-geometry inductive bias before the
+    Perceiver cross-attention, instead of swapping the whole backbone for a point-ViT.
+    """
+    def __init__(self, coord_dim, in_chans, out_dim, k=8, hidden=64):
+        super().__init__()
+        self.k = k
+        cin = coord_dim + in_chans                                   # rel-coord + neighbour value
+        self.first = nn.Sequential(nn.Conv1d(cin, hidden, 1), nn.GroupNorm(1, hidden),
+                                   nn.GELU(), nn.Conv1d(hidden, 2 * hidden, 1))
+        self.second = nn.Sequential(nn.Conv1d(4 * hidden, 2 * hidden, 1), nn.GroupNorm(1, 2 * hidden),
+                                    nn.GELU(), nn.Conv1d(2 * hidden, out_dim, 1))
+
+    def forward(self, coords, u):
+        """coords (B,N,D), u (B,N,C) -> local feature (B,N,out_dim)."""
+        B, N, D = coords.shape
+        idx = knn_index(coords, self.k)                              # (B,N,k)
+        bidx = torch.arange(B, device=coords.device)[:, None, None]
+        nb_c = coords[bidx, idx] - coords[:, :, None, :]             # (B,N,k,D) relative coords
+        nb_u = u[bidx, idx]                                          # (B,N,k,C)
+        g = torch.cat([nb_c, nb_u], dim=-1).reshape(B * N, idx.size(-1), -1).transpose(1, 2)  # (BN, D+C, k)
+        f = self.first(g)                                           # (BN, 2h, k)
+        f = torch.cat([f.max(dim=2, keepdim=True)[0].expand(-1, -1, f.size(2)), f], dim=1)    # (BN, 4h, k)
+        f = self.second(f).max(dim=2)[0]                            # (BN, out_dim)
+        return f.reshape(B, N, -1)
+
+
+# ----------------------------------------------------------------------
 # Encoder
 # ----------------------------------------------------------------------
 class EncoderLayer(nn.Module):
@@ -170,7 +221,8 @@ class FAEEncoder(nn.Module):
     def __init__(self, emb_dim=320, num_iter=4, depth_per_iter=4,
                   num_cross_heads=4, num_self_heads=8,
                   n_freq=32, max_freq=32, val_dim=32,
-                  num_latents=128, dropout=0.0, coord_dim=2, in_chans=1, fourier_geometric=False):
+                  num_latents=128, dropout=0.0, coord_dim=2, in_chans=1, fourier_geometric=False,
+                  use_local=False, local_k=8, local_dim=48):
         super().__init__()
         self.num_iter = num_iter
         self.n_freq = n_freq
@@ -178,10 +230,14 @@ class FAEEncoder(nn.Module):
         self.coord_dim = coord_dim
         self.in_chans = in_chans
         self.fgeo = fourier_geometric
+        self.use_local = use_local
 
+        # local-neighbourhood feature steals `local_dim` from the coord-projection budget -> emb_dim unchanged
+        loc = local_dim if use_local else 0
         coord_feat_dim = 2 * coord_dim * n_freq
-        self.coord_proj = nn.Linear(coord_feat_dim, emb_dim - val_dim)
+        self.coord_proj = nn.Linear(coord_feat_dim, emb_dim - val_dim - loc)
         self.val_proj = nn.Linear(in_chans, val_dim)
+        self.local = LocalGroupEmbed(coord_dim, in_chans, local_dim, k=local_k) if use_local else None
 
         self.latents = nn.Parameter(torch.empty(1, num_latents, emb_dim))
         with torch.no_grad():
@@ -202,7 +258,10 @@ class FAEEncoder(nn.Module):
         cf = fourier_features(coords, self.n_freq, self.max_freq, self.fgeo)
         c = self.coord_proj(cf)
         v = self.val_proj(u)
-        tokens = torch.cat([c, v], dim=-1)
+        parts = [c, v]
+        if self.use_local:
+            parts.append(self.local(coords, u))                     # (B,N,local_dim) local geometry
+        tokens = torch.cat(parts, dim=-1)
 
         q = self.latents.expand(u.size(0), -1, -1)
         q = self.layer_1(q, tokens)
@@ -280,6 +339,28 @@ class TokenPredictor(nn.Module):
         return self.head(self.norm(x))
 
 
+class LinearTokenPredictor(nn.Module):
+    """dt-conditioned LINEAR latent evolution L_t -> L_{t+d} (Koopman/DMD-style bottleneck): a per-token
+    linear operator A(d) acting on the latent state, NO self-attention and NO nonlinearity in the state.
+    A(d) = sum_k g_k(d) K_k (dt-modulated combination of n_basis learned generators); residual x + A(d)x.
+    Forces L_t to carry the dynamics (linear in the latent <=> latent linearizes the PDE flow)."""
+    def __init__(self, dim, n_basis=4, dt_freq=16):
+        super().__init__()
+        self.dt_freq = dt_freq
+        self.dt_mlp = nn.Sequential(nn.Linear(2 * dt_freq, 64), nn.GELU(), nn.Linear(64, n_basis))
+        self.K = nn.Parameter(torch.randn(n_basis, dim, dim) * (dim ** -0.5) * 0.1)   # generator matrices
+
+    def _dt_feat(self, dt):
+        f = torch.arange(1, self.dt_freq + 1, device=dt.device, dtype=dt.dtype)
+        a = dt[:, None] * f[None, :] * math.pi
+        return torch.cat([torch.sin(a), torch.cos(a)], dim=-1)
+
+    def forward(self, x, dt):                                  # x (B,M,D), dt (B,) -> (B,M,D)
+        g = self.dt_mlp(self._dt_feat(dt))                     # (B, n_basis)
+        A = torch.einsum("bk,kij->bij", g, self.K)             # (B, D, D) dt-dependent linear operator
+        return x + torch.einsum("bij,bmj->bmi", A, x)          # x + A(d) x  (linear in the latent state)
+
+
 # ----------------------------------------------------------------------
 # Full autoencoder
 # ----------------------------------------------------------------------
@@ -298,7 +379,8 @@ class FAE(nn.Module):
                   n_freq=32, max_freq=32, val_dim=32,
                   dec_n_freq=32, dec_max_freq=32, dec_num_heads=4,
                   num_latents=128, dropout=0.0, coord_dim=2,
-                  in_chans=1, fourier_geometric=False):
+                  in_chans=1, fourier_geometric=False,
+                  use_local=False, local_k=8, local_dim=48):
         super().__init__()
         self.encoder = FAEEncoder(
             emb_dim=emb_dim, num_iter=num_iter, depth_per_iter=depth_per_iter,
@@ -306,7 +388,8 @@ class FAE(nn.Module):
             n_freq=n_freq, max_freq=max_freq, val_dim=val_dim,
             num_latents=num_latents, dropout=dropout,
             coord_dim=coord_dim,
-            in_chans=in_chans, fourier_geometric=fourier_geometric)
+            in_chans=in_chans, fourier_geometric=fourier_geometric,
+            use_local=use_local, local_k=local_k, local_dim=local_dim)
         self.decoder = FAEDecoder(
             emb_dim_in=emb_dim, dec_dim=emb_dim,
             n_freq=dec_n_freq, max_freq=dec_max_freq,

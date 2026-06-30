@@ -32,15 +32,16 @@ import torch
 import torch.nn as nn
 from timm.models.vision_transformer import Block
 
-from benchmarks.mae.mae import get_2d_sincos_pos_embed
+from benchmarks.mae.mae import get_2d_sincos_pos_embed_rect
 
 
 class PatchEmbed2D(nn.Module):
     def __init__(self, img_size=128, patch_size=16, in_chans=4, embed_dim=256):
         super().__init__()
-        assert img_size % patch_size == 0
-        self.grid = img_size // patch_size
-        self.num_patches = self.grid ** 2
+        H, W = (img_size, img_size) if isinstance(img_size, int) else tuple(img_size)
+        assert H % patch_size == 0 and W % patch_size == 0
+        self.grid = (H // patch_size, W // patch_size)           # (gh, gw); rectangular-aware
+        self.num_patches = self.grid[0] * self.grid[1]
         self.proj = nn.Conv2d(in_chans, embed_dim, kernel_size=patch_size, stride=patch_size)
 
     def forward(self, x):                       # (B, C, H, W) -> (B, P, D)
@@ -88,7 +89,8 @@ class ViT2D(nn.Module):
         super().__init__()
         self.patch_embed = PatchEmbed2D(img_size, patch_size, in_chans, embed_dim)
         P = self.patch_embed.num_patches
-        pe = get_2d_sincos_pos_embed(embed_dim, self.patch_embed.grid, cls_token=False)
+        self.grid = self.patch_embed.grid                        # (gh, gw) for masking
+        pe = get_2d_sincos_pos_embed_rect(embed_dim, self.grid[0], self.grid[1], cls_token=False)
         self.pos_embed = nn.Parameter(torch.from_numpy(pe).float().unsqueeze(0), requires_grad=False)
         self.blocks = nn.ModuleList([Block(embed_dim, num_heads, mlp_ratio, qkv_bias=True) for _ in range(depth)])
         self.norm = nn.LayerNorm(embed_dim)
@@ -106,12 +108,12 @@ class ViT2D(nn.Module):
 
 class Predictor2D(nn.Module):
     """Predicts target-patch features from context tokens."""
-    def __init__(self, num_patches, embed_dim=256, pred_dim=128, depth=4, num_heads=4, mlp_ratio=4.):
+    def __init__(self, grid, embed_dim=256, pred_dim=128, depth=4, num_heads=4, mlp_ratio=4.):
         super().__init__()
         self.embed = nn.Linear(embed_dim, pred_dim)
         self.mask_token = nn.Parameter(torch.zeros(1, 1, pred_dim))
         nn.init.trunc_normal_(self.mask_token, std=.02)
-        pe = get_2d_sincos_pos_embed(pred_dim, int(num_patches ** .5), cls_token=False)
+        pe = get_2d_sincos_pos_embed_rect(pred_dim, grid[0], grid[1], cls_token=False)
         self.pos = nn.Parameter(torch.from_numpy(pe).float().unsqueeze(0), requires_grad=False)
         self.blocks = nn.ModuleList([Block(pred_dim, num_heads, mlp_ratio, qkv_bias=True) for _ in range(depth)])
         self.norm = nn.LayerNorm(pred_dim)
@@ -139,8 +141,9 @@ class IJEPA2D(nn.Module):
         self.target.load_state_dict(self.encoder.state_dict())
         for p in self.target.parameters():
             p.requires_grad_(False)
-        self.predictor = Predictor2D(self.encoder.num_patches, embed_dim, pred_dim, pred_depth, pred_heads)
+        self.predictor = Predictor2D(self.encoder.grid, embed_dim, pred_dim, pred_depth, pred_heads)
         self.num_patches = self.encoder.num_patches
+        self.grid = self.encoder.grid                            # (gh, gw) for the trainer's block masking
 
     @torch.no_grad()
     def update_target(self, tau):

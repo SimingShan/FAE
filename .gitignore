@@ -1,5 +1,6 @@
-# ---- algorithm + evaluation scripts only: no results, plots, data, weights ----
-results/                 # all metrics JSON, embeddings, figures
+# ---- repo tracks CODE only: no results, plots, data, weights ----
+# results: metrics JSON, embeddings, figures, sweeps, probes (regenerate)
+results/
 *.png
 *.jpg
 *.pdf
@@ -10,7 +11,8 @@ results/                 # all metrics JSON, embeddings, figures
 *.hdf5
 *.npz
 logs/
-/data/                   # repo-root dataset dir only (NOT src/data/ loader code)
+# repo-root dataset dir only — NOT scripts/data/ (gen+prep code) or src/data/ (loaders)
+/data/
 dataset_cache/
 checkpoints/
 # environments / caches
@@ -21,7 +23,9 @@ __pycache__/
 *.egg-info/
 wandb/
 .DS_Store
-# external clones (cloned per docs/MIGRATION.md): MAE, JEPA harness, ijepa, the_well
+# external clones (MAE, JEPA harness, ijepa, the_well, apebench venv)
 external/
-results/figs/
-results/figures/
+# slurm
+slurm/
+slurm-*.out
+*.out

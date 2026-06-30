@@ -1,0 +1,14 @@
+# FAE (ours) on shallow-water. Canonical = twoview (dual sparse views + latent temporal predictor
+# + present/future recon). Coordinate encoder -> resolution-free. dt_max from decorrelation (10).
+method: fae
+mode: twoview
+num_latents: 128
+num_iter: 4
+depth_per_iter: 5         # -> ~7.5M encoder, matched to MAE
+mcnt_range: [64, 1024]    # random-uniform sensors per view (full sparsity range for the sparse-sensor analysis)
+sensor_pattern: discrete
+dt_max: 10                # temporal sweep overrides to {1, 5, 10}
+tag: fae_sw128
+lr: 5.0e-4
+weight_decay: 1.0e-4
+betas: [0.9, 0.999]

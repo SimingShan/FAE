@@ -1,0 +1,11 @@
+# MAE on shallow-water — masked-reconstruction baseline (Kaiming port).
+# patch_size 8 at res 128 -> 16x16 = 256 patch tokens (matches FAE feature granularity).
+method: mae
+patch_size: 8
+depth: 6
+num_heads: 8
+mask_ratio: 0.75
+tag: mae_sw128
+lr: 1.5e-4              # Kaiming MAE recipe
+weight_decay: 0.05
+betas: [0.9, 0.95]

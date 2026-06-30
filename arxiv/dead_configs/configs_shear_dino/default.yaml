@@ -1,0 +1,11 @@
+# DINO on shear — self-distillation (no labels) baseline. Faithful single-GPU port
+# (benchmarks/dino/dino2d.py): ViT backbone PARAM-MATCHED to MAE/I-JEPA (patch 8 / depth 6 / heads 8,
+# ~ViT-Tiny). Multi-crop is GEOMETRIC only (no photometric/flip augs — physical fields).
+method: dino
+patch_size: 8
+depth: 6
+num_heads: 8
+tag: dino_shear
+lr: 5.0e-4             # DINO recipe (single-GPU)
+weight_decay: 0.04
+betas: [0.9, 0.999]

@@ -7,7 +7,7 @@ num_iter: 4
 depth_per_iter: 5
 mcnt_range: [64, 1024]
 sensor_pattern: discrete
-dt_max: 1
+dt_max: 12
 tag: fae_shear224
 lr: 5.0e-4
 weight_decay: 1.0e-4
